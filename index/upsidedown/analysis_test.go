@@ -17,10 +17,10 @@ package upsidedown
 import (
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis/analyzer/standard"
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/index/upsidedown/store/null"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis/analyzer/standard"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown/store/null"
+	"github.com/lscgzwd/tiggerdb/registry"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

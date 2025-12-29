@@ -19,7 +19,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis"
 )
 
 // Helper function to create a token
@@ -172,9 +172,9 @@ func TestCJKBigramFilter_outputBigram(t *testing.T) {
 			expectToken: &analysis.Token{
 				Type:     analysis.Double,
 				Term:     []byte("一二"), // Combined term
-				Position: 10,           // Should use inputPos
-				Start:    0,            // Start of first token
-				End:      6,            // End of second token
+				Position: 10,             // Should use inputPos
+				Start:    0,              // Start of first token
+				End:      6,              // End of second token
 			},
 		},
 		{

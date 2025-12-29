@@ -25,13 +25,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/analysis/analyzer/standard"
-	regexpTokenizer "github.com/blevesearch/bleve/v2/analysis/tokenizer/regexp"
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/index/upsidedown/store/boltdb"
-	"github.com/blevesearch/bleve/v2/index/upsidedown/store/null"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis/analyzer/standard"
+	regexpTokenizer "github.com/lscgzwd/tiggerdb/analysis/tokenizer/regexp"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown/store/boltdb"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown/store/null"
+	"github.com/lscgzwd/tiggerdb/registry"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

@@ -18,10 +18,10 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/highlight/format/ansi"
-	sfrag "github.com/blevesearch/bleve/v2/search/highlight/fragmenter/simple"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/highlight/format/ansi"
+	sfrag "github.com/lscgzwd/tiggerdb/search/highlight/fragmenter/simple"
 )
 
 const (

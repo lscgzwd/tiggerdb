@@ -24,10 +24,48 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
-	"github.com/blevesearch/bleve/v2/index/scorch/mergeplan"
-	"github.com/blevesearch/bleve/v2/util"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
+	"github.com/lscgzwd/tiggerdb/index/scorch/mergeplan"
+	"github.com/lscgzwd/tiggerdb/logger"
+	"github.com/lscgzwd/tiggerdb/util"
 )
+
+// 全局合并信号量，限制同时进行的合并操作数量
+// 避免多个索引同时合并导致磁盘 IO 竞争
+var (
+	globalMergeSemaphore     chan struct{}
+	globalMergeSemaphoreOnce sync.Once
+	MaxConcurrentMerges      = 2 // 默认最多同时 2 个合并操作
+)
+
+// initGlobalMergeSemaphore 初始化全局合并信号量
+func initGlobalMergeSemaphore() {
+	globalMergeSemaphoreOnce.Do(func() {
+		globalMergeSemaphore = make(chan struct{}, MaxConcurrentMerges)
+	})
+}
+
+// acquireMergeSlot 获取合并槽位（带索引路径用于日志）
+func acquireMergeSlot(indexPath string) {
+	initGlobalMergeSemaphore()
+	// 尝试非阻塞获取
+	select {
+	case globalMergeSemaphore <- struct{}{}:
+		// 成功获取槽位
+		return
+	default:
+		// 槽位已满，需要等待
+		logger.Debug("[Merger] waiting for merge slot: %s", indexPath)
+		globalMergeSemaphore <- struct{}{}
+		logger.Debug("[Merger] acquired merge slot: %s", indexPath)
+	}
+}
+
+// releaseMergeSlot 释放合并槽位
+func releaseMergeSlot(indexPath string) {
+	<-globalMergeSemaphore
+	logger.Debug("[Merger] released merge slot: %s", indexPath)
+}
 
 func (s *Scorch) mergerLoop() {
 	defer func() {
@@ -72,6 +110,15 @@ OUTER:
 			if ctrlMsg == nil && ourSnapshot.epoch != lastEpochMergePlanned {
 				ctrlMsg = ctrlMsgDflt
 			}
+			// 空闲时自动合并：即使 epoch 没变，如果有多个段也尝试合并
+			if ctrlMsg == nil && len(ourSnapshot.segment) > 1 {
+				// 减少日志输出，只在段数较多时才打印
+				if len(ourSnapshot.segment) > 4 {
+					logger.Debug("[Merger] idle merge check: segments=%d, epoch=%d, path=%s",
+						len(ourSnapshot.segment), ourSnapshot.epoch, s.path)
+				}
+				ctrlMsg = ctrlMsgDflt
+			}
 			if ctrlMsg != nil {
 				continueMerge := s.fireEvent(EventKindPreMergeCheck, 0)
 				// The default, if there's no handler, is to continue the merge.
@@ -90,9 +137,15 @@ OUTER:
 
 				startTime := time.Now()
 
+				// 获取全局合并槽位，限制并发合并数
+				acquireMergeSlot(s.path)
+
 				// lets get started
 				err := s.planMergeAtSnapshot(ctrlMsg.ctx, ctrlMsg.options,
 					ourSnapshot)
+
+				// 释放合并槽位
+				releaseMergeSlot(s.path)
 				if err != nil {
 					atomic.StoreUint64(&s.iStats.mergeEpoch, 0)
 					if err == segment.ErrClosed {
@@ -127,7 +180,20 @@ OUTER:
 
 				s.fireEvent(EventKindMergerProgress, time.Since(startTime))
 			}
+			// 优化：如果没有需要合并的segment，等待一段时间再检查，避免频繁循环
+			// 在DecRef之前检查segment数量
+			hasSegmentsToMerge := ourSnapshot != nil && len(ourSnapshot.segment) > 1
 			_ = ourSnapshot.DecRef()
+
+			// 如果没有需要合并的segment，等待一段时间再检查
+			if !hasSegmentsToMerge {
+				select {
+				case <-s.closeCh:
+					break OUTER
+				case <-time.After(5 * time.Second): // 等待5秒再检查
+					continue OUTER
+				}
+			}
 
 			// tell the persister we're waiting for changes
 			// first make a epochWatcher chan
@@ -146,11 +212,15 @@ OUTER:
 			}
 
 			// now wait for persister (but also detect close)
+			// 优化：添加超时，空闲时也定期检查是否需要合并
 			select {
 			case <-s.closeCh:
 				break OUTER
 			case <-ew.notifyCh:
 			case ctrlMsg = <-s.forceMergeRequestCh:
+			case <-time.After(10 * time.Second):
+				// 空闲超时，继续循环检查是否需要合并
+				continue OUTER
 			}
 		}
 

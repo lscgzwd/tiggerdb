@@ -20,10 +20,10 @@ import (
 	"math"
 	"time"
 
-	"github.com/blevesearch/bleve/v2/mapping"
-	"github.com/blevesearch/bleve/v2/numeric"
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/searcher"
+	"github.com/lscgzwd/tiggerdb/mapping"
+	"github.com/lscgzwd/tiggerdb/numeric"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/searcher"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

@@ -32,9 +32,9 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
-	"github.com/blevesearch/bleve/v2/util"
 	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
+	"github.com/lscgzwd/tiggerdb/util"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -228,6 +228,7 @@ OUTER:
 		case s.introducerNotifier <- w:
 		}
 
+		// 清理旧数据（包括合并后的旧段文件）
 		if ok := s.fireEvent(EventKindPurgerCheck, 0); ok {
 			s.removeOldData() // might as well cleanup while waiting
 		}
@@ -298,6 +299,7 @@ func (s *Scorch) pausePersisterForMergerCatchUp(lastPersistedEpoch uint64,
 	// 1. Too many older snapshots awaiting the clean up.
 	// 2. The merger could be lagging behind on merging the disk files.
 	if numFilesOnDisk > uint64(po.PersisterNapUnderNumFiles) {
+		// 清理旧数据（包括合并后的旧段文件）
 		if ok := s.fireEvent(EventKindPurgerCheck, 0); ok {
 			s.removeOldData()
 		}
@@ -1285,13 +1287,39 @@ func (s *Scorch) removeOldZapFiles() error {
 		return err
 	}
 
+	// 获取当前root snapshot使用的文件，避免删除正在使用的文件
+	s.rootLock.RLock()
+	currentRoot := s.root
+	activeFileNames := make(map[string]struct{})
+	if currentRoot != nil {
+		// 增加引用计数，确保在检查期间不会被释放
+		currentRoot.AddRef()
+		// 收集当前root使用的所有segment文件
+		for _, seg := range currentRoot.segment {
+			if perSeg, ok := seg.segment.(segment.PersistedSegment); ok {
+				fileName := filepath.Base(perSeg.Path())
+				activeFileNames[fileName] = struct{}{}
+			}
+		}
+		// 立即释放引用
+		_ = currentRoot.DecRef()
+	}
+	s.rootLock.RUnlock()
+
 	s.rootLock.RLock()
 
 	for _, f := range files {
 		fname := f.Name()
 		if filepath.Ext(fname) == ".zap" {
-			if _, exists := liveFileNames[fname]; !exists && !s.ineligibleForRemoval[fname] && (s.copyScheduled[fname] <= 0) {
-				err := os.Remove(s.path + string(os.PathSeparator) + fname)
+			// 检查文件是否在bolt中、是否在eligible列表中、是否在copy中、是否被当前root使用
+			_, inBolt := liveFileNames[fname]
+			_, inActive := activeFileNames[fname]
+			ineligible := s.ineligibleForRemoval[fname]
+			copyScheduled := s.copyScheduled[fname] > 0
+
+			if !inBolt && !inActive && !ineligible && !copyScheduled {
+				filePath := s.path + string(os.PathSeparator) + fname
+				err := removeFileWithRetry(filePath)
 				if err != nil {
 					log.Printf("got err removing file: %s, err: %v", fname, err)
 				}
@@ -1458,4 +1486,28 @@ func (s *Scorch) loadZapFileNames() (map[string]struct{}, error) {
 	})
 
 	return rv, err
+}
+
+// removeFileWithRetry 尝试删除文件，如果失败则重试（Windows文件锁定问题）
+func removeFileWithRetry(filePath string) error {
+	maxRetries := 3
+	retryDelay := 100 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		err := os.Remove(filePath)
+		if err == nil {
+			return nil
+		}
+
+		// 如果是最后一次尝试，直接返回错误
+		if i == maxRetries-1 {
+			return err
+		}
+
+		// 等待一段时间后重试（Windows文件句柄释放需要时间）
+		time.Sleep(retryDelay)
+		retryDelay *= 2 // 指数退避
+	}
+
+	return fmt.Errorf("failed to remove file after %d retries", maxRetries)
 }

@@ -18,8 +18,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
 func TestArabicAnalyzer(t *testing.T) {
@@ -157,7 +157,7 @@ func TestArabicAnalyzer(t *testing.T) {
 		},
 		// presentation form normalization
 		{
-			input: []byte("ﺍﻟﺴﻼﻢ"),
+			input: []byte("ﺍﻟﺴﻼ�?),
 			output: analysis.TokenStream{
 				&analysis.Token{
 					Term:     []byte("سلام"),

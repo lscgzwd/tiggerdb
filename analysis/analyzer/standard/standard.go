@@ -15,11 +15,11 @@
 package standard
 
 import (
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/analysis/lang/en"
-	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
-	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis/lang/en"
+	"github.com/lscgzwd/tiggerdb/analysis/token/lowercase"
+	"github.com/lscgzwd/tiggerdb/analysis/tokenizer/unicode"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
 const Name = "standard"

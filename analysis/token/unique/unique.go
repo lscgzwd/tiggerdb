@@ -15,8 +15,8 @@
 package unique
 
 import (
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
 const Name = "unique"

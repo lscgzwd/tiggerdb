@@ -15,7 +15,7 @@
 package bleve
 
 import (
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 // A preSearchResultProcessor processes the data in

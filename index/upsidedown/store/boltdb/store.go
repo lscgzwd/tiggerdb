@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/registry"
 	store "github.com/blevesearch/upsidedown_store_api"
 	bolt "go.etcd.io/bbolt"
 )

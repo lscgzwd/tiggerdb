@@ -20,9 +20,9 @@ import (
 
 	index "github.com/blevesearch/bleve_index_api"
 
-	"github.com/blevesearch/bleve/v2/registry"
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/highlight"
+	"github.com/lscgzwd/tiggerdb/registry"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/highlight"
 )
 
 const Name = "simple"

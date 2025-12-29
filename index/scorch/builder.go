@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
@@ -225,7 +226,7 @@ func (o *Builder) doMerge() error {
 
 		// remove merged segments
 		for _, mergePath := range mergePaths {
-			err = os.RemoveAll(mergePath)
+			err = removePathWithRetry(mergePath)
 			if err != nil {
 				return fmt.Errorf("error removing segment %s after merge: %v", mergePath, err)
 			}
@@ -329,4 +330,28 @@ func (o *Builder) Close() error {
 		return fmt.Errorf("error closing final segment: %v", err)
 	}
 	return nil
+}
+
+// removePathWithRetry 尝试删除路径，如果失败则重试（Windows文件锁定问题）
+func removePathWithRetry(path string) error {
+	maxRetries := 3
+	retryDelay := 100 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		err := os.RemoveAll(path)
+		if err == nil {
+			return nil
+		}
+
+		// 如果是最后一次尝试，直接返回错误
+		if i == maxRetries-1 {
+			return err
+		}
+
+		// 等待一段时间后重试（Windows文件句柄释放需要时间）
+		time.Sleep(retryDelay)
+		retryDelay *= 2 // 指数退避
+	}
+
+	return fmt.Errorf("failed to remove path after %d retries", maxRetries)
 }

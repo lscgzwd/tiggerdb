@@ -19,8 +19,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/blevesearch/bleve/v2/util"
 	"github.com/blevesearch/geo/geojson"
+	"github.com/lscgzwd/tiggerdb/util"
 )
 
 // ExtractGeoPoint takes an arbitrary interface{} and tries it's best to

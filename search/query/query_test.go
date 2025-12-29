@@ -21,8 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blevesearch/bleve/v2/geo"
-	"github.com/blevesearch/bleve/v2/mapping"
+	"github.com/lscgzwd/tiggerdb/mapping"
 )
 
 var minNum = 5.1

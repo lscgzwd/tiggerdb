@@ -18,8 +18,8 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/blevesearch/bleve/v2/size"
-	"github.com/blevesearch/bleve/v2/util"
+	"github.com/lscgzwd/tiggerdb/size"
+	"github.com/lscgzwd/tiggerdb/util"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

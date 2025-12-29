@@ -18,3 +18,9 @@ vendor/**
 *.test
 tags
 go.sum
+config.yaml
+config/config.yaml
+tigerdb.yaml
+config/tigerdb.yaml
+*.exe
+*.log

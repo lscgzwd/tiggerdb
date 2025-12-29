@@ -17,7 +17,7 @@ package scorch
 import (
 	"reflect"
 
-	"github.com/blevesearch/bleve/v2/size"
+	"github.com/lscgzwd/tiggerdb/size"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 

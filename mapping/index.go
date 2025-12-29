@@ -18,12 +18,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/analysis/analyzer/standard"
-	"github.com/blevesearch/bleve/v2/analysis/datetime/optional"
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/registry"
-	"github.com/blevesearch/bleve/v2/util"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis/analyzer/standard"
+	"github.com/lscgzwd/tiggerdb/analysis/datetime/optional"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/registry"
+	"github.com/lscgzwd/tiggerdb/util"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

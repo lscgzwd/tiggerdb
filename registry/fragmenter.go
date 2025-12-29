@@ -17,7 +17,7 @@ package registry
 import (
 	"fmt"
 
-	"github.com/blevesearch/bleve/v2/search/highlight"
+	"github.com/lscgzwd/tiggerdb/search/highlight"
 )
 
 func RegisterFragmenter(name string, constructor FragmenterConstructor) error {

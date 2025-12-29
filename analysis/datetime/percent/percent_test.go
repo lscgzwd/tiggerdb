@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blevesearch/bleve/v2/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis"
 )
 
 func TestConversionFromPercentStyle(t *testing.T) {

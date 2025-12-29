@@ -18,7 +18,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis"
 )
 
 func TestCJKWidthFilter(t *testing.T) {
@@ -60,7 +60,7 @@ func TestCJKWidthFilter(t *testing.T) {
 		{
 			input: analysis.TokenStream{
 				&analysis.Token{
-					Term: []byte("ｳﾞｨｯﾂ"),
+					Term: []byte("ｳﾞｨｯ�?),
 				},
 			},
 			output: analysis.TokenStream{
@@ -72,7 +72,7 @@ func TestCJKWidthFilter(t *testing.T) {
 		{
 			input: analysis.TokenStream{
 				&analysis.Token{
-					Term: []byte("ﾊﾟﾅｿﾆｯｸ"),
+					Term: []byte("ﾊﾟﾅｿﾆｯ�?),
 				},
 			},
 			output: analysis.TokenStream{

@@ -17,7 +17,7 @@ package scorch
 import (
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/document"
+	"github.com/lscgzwd/tiggerdb/document"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

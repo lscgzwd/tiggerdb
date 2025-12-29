@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis"
 )
 
 func TestHierarchyFilter(t *testing.T) {

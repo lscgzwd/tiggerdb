@@ -18,7 +18,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis"
 )
 
 func TestIndicNormalizeFilter(t *testing.T) {
@@ -102,12 +102,12 @@ func TestIndicNormalizeFilter(t *testing.T) {
 		{
 			input: analysis.TokenStream{
 				&analysis.Token{
-					Term: []byte("ত্‍"),
+					Term: []byte("ত্�?),
 				},
 			},
 			output: analysis.TokenStream{
 				&analysis.Token{
-					Term: []byte("ৎ"),
+					Term: []byte("�?),
 				},
 			},
 		},

@@ -17,8 +17,8 @@ package bleve
 import (
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/query"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/query"
 )
 
 func createFTSIndex(path string) (Index, error) {

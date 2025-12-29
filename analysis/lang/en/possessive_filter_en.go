@@ -1,4 +1,4 @@
-//  Copyright (c) 2014 Couchbase, Inc.
+// Copyright (c) 2014 Couchbase, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,55 +15,46 @@
 package en
 
 import (
-	"unicode/utf8"
+	"bytes"
 
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
-// PossessiveName is the name PossessiveFilter is registered as
-// in the bleve registry.
-const PossessiveName = "possessive_en"
+const Name = "possessive_en"
 
-const rightSingleQuotationMark = '’'
-const apostrophe = '\''
-const fullWidthApostrophe = '＇'
+// PossessiveName is the same as Name
+const PossessiveName = Name
 
-const apostropheChars = rightSingleQuotationMark + apostrophe + fullWidthApostrophe
+// 's or ' (Apostrophe S or Apostrophe)
+var possessive = []byte{39, 115}
 
-// PossessiveFilter implements a TokenFilter which
-// strips the English possessive suffix ('s) from tokens.
-// It handle a variety of apostrophe types, is case-insensitive
-// and doesn't distinguish between possessive and contraction.
-// (ie "She's So Rad" becomes "She So Rad")
-type PossessiveFilter struct {
-}
+func PossessiveFilter(input analysis.TokenStream) analysis.TokenStream {
+	rv := make(analysis.TokenStream, 0, len(input))
 
-func NewPossessiveFilter() *PossessiveFilter {
-	return &PossessiveFilter{}
-}
-
-func (s *PossessiveFilter) Filter(input analysis.TokenStream) analysis.TokenStream {
 	for _, token := range input {
-		lastRune, lastRuneSize := utf8.DecodeLastRune(token.Term)
-		if lastRune == 's' || lastRune == 'S' {
-			nextLastRune, nextLastRuneSize := utf8.DecodeLastRune(token.Term[:len(token.Term)-lastRuneSize])
-			if nextLastRune == rightSingleQuotationMark ||
-				nextLastRune == apostrophe ||
-				nextLastRune == fullWidthApostrophe {
-				token.Term = token.Term[:len(token.Term)-lastRuneSize-nextLastRuneSize]
-			}
+		rv = append(rv, token)
+		// if token ends in 's remove the 's
+		if bytes.HasSuffix(token.Term, possessive) {
+			token.Term = token.Term[:len(token.Term)-2]
+		} else if token.Term[len(token.Term)-1] == 39 { // '
+			token.Term = token.Term[:len(token.Term)-1]
 		}
 	}
-	return input
+
+	return rv
 }
 
-func PossessiveFilterConstructor(config map[string]interface{}, cache *registry.Cache) (analysis.TokenFilter, error) {
-	return NewPossessiveFilter(), nil
+type possessiveFilter struct{}
+
+func (f *possessiveFilter) Filter(input analysis.TokenStream) analysis.TokenStream {
+	return PossessiveFilter(input)
 }
 
 func init() {
-	err := registry.RegisterTokenFilter(PossessiveName, PossessiveFilterConstructor)
+	err := registry.RegisterTokenFilter(Name, func(config map[string]interface{}, cache *registry.Cache) (analysis.TokenFilter, error) {
+		return &possessiveFilter{}, nil
+	})
 	if err != nil {
 		panic(err)
 	}

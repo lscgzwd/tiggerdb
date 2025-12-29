@@ -18,15 +18,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/analysis/analyzer/keyword"
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/geo"
-	"github.com/blevesearch/bleve/v2/util"
 	index "github.com/blevesearch/bleve_index_api"
 	"github.com/blevesearch/geo/geojson"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis/analyzer/keyword"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/geo"
+	"github.com/lscgzwd/tiggerdb/util"
 )
 
 // control the default behavior for dynamic fields (those not explicitly mapped)
@@ -272,6 +273,11 @@ func (fm *FieldMapping) processFloat64(propertyValFloat float64, pathString stri
 		if !fm.IncludeInAll {
 			context.excludedFromAll = append(context.excludedFromAll, fieldName)
 		}
+	} else if fm.Type == "text" {
+		// 对于 text 类型字段（包括 keyword），将数字转换为字符串并索引
+		// 这确保了 ES 风格的 keyword 字段可以索引数字数组（如 [1, 2, 3]）
+		propertyValueString := strconv.FormatFloat(propertyValFloat, 'g', -1, 64)
+		fm.processString(propertyValueString, pathString, path, indexes, context)
 	}
 }
 
@@ -302,6 +308,11 @@ func (fm *FieldMapping) processBoolean(propertyValueBool bool, pathString string
 		if !fm.IncludeInAll {
 			context.excludedFromAll = append(context.excludedFromAll, fieldName)
 		}
+	} else if fm.Type == "text" {
+		// 对于 text 类型字段（包括 keyword），将布尔值转换为字符串并索引
+		// 这确保了 ES 风格的 keyword 字段可以索引布尔数组（如 [true, false]）
+		propertyValueString := strconv.FormatBool(propertyValueBool)
+		fm.processString(propertyValueString, pathString, path, indexes, context)
 	}
 }
 

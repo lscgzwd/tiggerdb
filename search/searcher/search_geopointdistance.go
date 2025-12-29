@@ -17,10 +17,10 @@ package searcher
 import (
 	"context"
 
-	"github.com/blevesearch/bleve/v2/geo"
-	"github.com/blevesearch/bleve/v2/numeric"
-	"github.com/blevesearch/bleve/v2/search"
 	index "github.com/blevesearch/bleve_index_api"
+	"github.com/lscgzwd/tiggerdb/geo"
+	"github.com/lscgzwd/tiggerdb/numeric"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 func NewGeoPointDistanceSearcher(ctx context.Context, indexReader index.IndexReader, centerLon,

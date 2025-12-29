@@ -22,9 +22,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/mapping"
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/query"
+	"github.com/lscgzwd/tiggerdb/mapping"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/query"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

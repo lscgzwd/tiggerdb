@@ -17,11 +17,11 @@ package searcher
 import (
 	"context"
 
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/geo"
-	"github.com/blevesearch/bleve/v2/numeric"
-	"github.com/blevesearch/bleve/v2/search"
 	index "github.com/blevesearch/bleve_index_api"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/geo"
+	"github.com/lscgzwd/tiggerdb/numeric"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 type filterFunc func(key []byte) bool

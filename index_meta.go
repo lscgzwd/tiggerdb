@@ -19,8 +19,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/blevesearch/bleve/v2/index/upsidedown"
-	"github.com/blevesearch/bleve/v2/util"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown"
+	"github.com/lscgzwd/tiggerdb/util"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

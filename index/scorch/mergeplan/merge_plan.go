@@ -23,6 +23,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/lscgzwd/tiggerdb/logger"
 )
 
 // A Segment represents the information that the planner needs to
@@ -146,25 +148,29 @@ const MaxSegmentSizeLimit = 1<<31 - 1
 var ErrMaxSegmentSizeTooLarge = errors.New("MaxSegmentSize exceeds the size limit")
 
 // DefaultMergePlanOptions suggests the default options.
+// 性能优化：更积极的合并策略
+// - MaxSegmentsPerTier: 降低到3，每层最多3个段，超过就触发合并
+// - SegmentsPerMergeTask: 每次合并3个段
+// - FloorSegmentSize: 50000文档，小段被视为相同大小
 var DefaultMergePlanOptions = MergePlanOptions{
-	MaxSegmentsPerTier:   10,
-	MaxSegmentSize:       5000000,
+	MaxSegmentsPerTier:   3,          // 每层最多3个段，更积极合并
+	MaxSegmentSize:       5000000,    // 500万文档
 	MaxSegmentFileSize:   4000000000, // 4GB
 	TierGrowth:           10.0,
-	SegmentsPerMergeTask: 10,
-	FloorSegmentSize:     2000,
+	SegmentsPerMergeTask: 3,     // 一次合并3个段
+	FloorSegmentSize:     50000, // 50000文档以下视为相同大小
 	ReclaimDeletesWeight: 2.0,
 }
 
 // SingleSegmentMergePlanOptions helps in creating a
-// single segment index.
+// single segment index. Used by ForceMerge when no options provided.
 var SingleSegmentMergePlanOptions = MergePlanOptions{
-	MaxSegmentsPerTier:   1,
-	MaxSegmentSize:       1 << 30,
-	MaxSegmentFileSize:   1 << 40,
-	TierGrowth:           1.0,
-	SegmentsPerMergeTask: 10,
-	FloorSegmentSize:     1 << 30,
+	MaxSegmentsPerTier:   1,       // 每层只允许1个段，强制全部合并
+	MaxSegmentSize:       1 << 30, // 10亿文档
+	MaxSegmentFileSize:   1 << 40, // 1TB
+	TierGrowth:           1.0,     // 不分层
+	SegmentsPerMergeTask: 50,      // 从10增加到50，一次合并更多段，加速ForceMerge
+	FloorSegmentSize:     1 << 30, // 所有段视为相同大小
 	ReclaimDeletesWeight: 2.0,
 	FloorSegmentFileSize: 1 << 40,
 }
@@ -237,6 +243,10 @@ func plan(segmentsIn []Segment, o *MergePlanOptions) (*MergePlan, error) {
 		scoreSegments = ScoreSegments
 	}
 
+	// 调试日志：输出合并计划的关键参数
+	logger.Debug("[MergePlan] segments=%d, eligibles=%d, eligiblesLiveSize=%d, minLiveSize=%d, budgetNumSegments=%d, FloorSegmentSize=%d",
+		len(segments), len(eligibles), eligiblesLiveSize, minLiveSize, budgetNumSegments, o.FloorSegmentSize)
+
 	rv := &MergePlan{}
 
 	var empties []Segment
@@ -250,20 +260,34 @@ func plan(segmentsIn []Segment, o *MergePlanOptions) (*MergePlan, error) {
 		eligibles = removeSegments(eligibles, empties)
 	}
 
-	// While we’re over budget, keep looping, which might produce
+	// While we're over budget, keep looping, which might produce
 	// another MergeTask.
+	needMerge := len(eligibles) > 0 && (len(eligibles)+len(rv.Tasks)) > budgetNumSegments
+	logger.Debug("[MergePlan] needMerge=%v, eligibles=%d, tasks=%d, budget=%d", needMerge, len(eligibles), len(rv.Tasks), budgetNumSegments)
 	for len(eligibles) > 0 && (len(eligibles)+len(rv.Tasks)) > budgetNumSegments {
 		// Track a current best roster as we examine and score
 		// potential rosters of merges.
 		var bestRoster []Segment
 		var bestRosterScore float64 // Lower score is better.
 
+		// 优化：当有很多小segment堆积时，动态增加每次合并的segment数量
+		// 如果eligible segment数量很多（超过50个），允许一次合并更多segment
+		maxSegmentsPerTask := o.SegmentsPerMergeTask
+		if len(eligibles) > 50 {
+			// 动态增加：每多50个segment，增加10个合并数量，最多增加到50个
+			additionalSegments := (len(eligibles) / 50) * 10
+			if additionalSegments > 30 {
+				additionalSegments = 30 // 最多增加到50（20+30）
+			}
+			maxSegmentsPerTask = o.SegmentsPerMergeTask + additionalSegments
+		}
+
 		for startIdx := 0; startIdx < len(eligibles); startIdx++ {
 			var roster []Segment
 			var rosterLiveSize int64
 			var rosterFileSize int64 // useful for segments with vectors
 
-			for idx := startIdx; idx < len(eligibles) && len(roster) < o.SegmentsPerMergeTask; idx++ {
+			for idx := startIdx; idx < len(eligibles) && len(roster) < maxSegmentsPerTask; idx++ {
 				eligible := eligibles[idx]
 
 				if rosterLiveSize+eligible.LiveSize() >= o.MaxSegmentSize {

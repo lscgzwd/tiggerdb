@@ -15,9 +15,9 @@
 package bleve
 
 import (
-	"github.com/blevesearch/bleve/v2/fusion"
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/query"
+	"github.com/lscgzwd/tiggerdb/fusion"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/query"
 )
 
 const (

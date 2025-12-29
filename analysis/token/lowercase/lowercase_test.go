@@ -18,7 +18,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis"
 )
 
 func TestLowerCaseFilter(t *testing.T) {
@@ -40,8 +40,8 @@ func TestLowerCaseFilter(t *testing.T) {
 		// because the utf-8 encoding of the lower-case
 		// version has a different length
 		// Rune İ(304) width 2 - Lower i(105) width 1
-		// Rune Ⱥ(570) width 2 - Lower ⱥ(11365) width 3
-		// Rune Ⱦ(574) width 2 - Lower ⱦ(11366) width 3
+		// Rune Ⱥ(570) width 2 - Lower �?11365) width 3
+		// Rune Ⱦ(574) width 2 - Lower �?11366) width 3
 		&analysis.Token{
 			Term: []byte("İȺȾCAT"),
 		},
@@ -49,7 +49,7 @@ func TestLowerCaseFilter(t *testing.T) {
 			Term: []byte("ȺȾCAT"),
 		},
 		&analysis.Token{
-			Term: []byte("ὈΔΥΣΣ"),
+			Term: []byte("ὈΔΥΣ�?),
 		},
 	}
 

@@ -25,9 +25,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/blevesearch/bleve/v2/geo"
-	"github.com/blevesearch/bleve/v2/numeric"
-	"github.com/blevesearch/bleve/v2/util"
+	"github.com/lscgzwd/tiggerdb/geo"
+	"github.com/lscgzwd/tiggerdb/numeric"
+	"github.com/lscgzwd/tiggerdb/util"
 )
 
 var (

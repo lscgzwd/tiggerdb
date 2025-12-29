@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 func formatRRFMessage(weight float64, rank int, rankConstant int) string {

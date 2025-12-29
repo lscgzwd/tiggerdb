@@ -15,13 +15,13 @@
 package fa
 
 import (
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/registry"
 
-	"github.com/blevesearch/bleve/v2/analysis/char/zerowidthnonjoiner"
-	"github.com/blevesearch/bleve/v2/analysis/lang/ar"
-	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
-	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
+	"github.com/lscgzwd/tiggerdb/analysis/char/zerowidthnonjoiner"
+	"github.com/lscgzwd/tiggerdb/analysis/lang/ar"
+	"github.com/lscgzwd/tiggerdb/analysis/token/lowercase"
+	"github.com/lscgzwd/tiggerdb/analysis/tokenizer/unicode"
 )
 
 const AnalyzerName = "fa"

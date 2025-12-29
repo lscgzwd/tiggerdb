@@ -1,4 +1,4 @@
-//  Copyright (c) 2018 Couchbase, Inc.
+﻿//  Copyright (c) 2018 Couchbase, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@
 package asciifolding
 
 import (
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
 const Name = "asciifolding"

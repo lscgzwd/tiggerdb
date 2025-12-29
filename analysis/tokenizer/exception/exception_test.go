@@ -18,9 +18,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis"
-	_ "github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	_ "github.com/lscgzwd/tiggerdb/analysis/tokenizer/unicode"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
 func TestExceptionsTokenizer(t *testing.T) {

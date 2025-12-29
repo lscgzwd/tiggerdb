@@ -18,9 +18,9 @@ import (
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring/v2"
-	"github.com/blevesearch/bleve/v2/geo"
 	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
+	"github.com/lscgzwd/tiggerdb/geo"
 
 	zapv11 "github.com/blevesearch/zapx/v11"
 	zapv12 "github.com/blevesearch/zapx/v12"

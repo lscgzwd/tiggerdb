@@ -23,10 +23,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/collector"
-	"github.com/blevesearch/bleve/v2/search/query"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/collector"
+	"github.com/lscgzwd/tiggerdb/search/query"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

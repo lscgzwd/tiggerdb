@@ -16,7 +16,7 @@
 package fusion
 
 import (
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 // scoreBreakdownSortFunc returns a comparison function for sorting DocumentMatch objects

@@ -19,10 +19,10 @@ import (
 	"math"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/index/upsidedown"
-	"github.com/blevesearch/bleve/v2/index/upsidedown/store/gtreap"
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown/store/gtreap"
+	"github.com/lscgzwd/tiggerdb/search"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

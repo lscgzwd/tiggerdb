@@ -1,4 +1,4 @@
-//  Copyright (c) 2014 Couchbase, Inc.
+﻿//  Copyright (c) 2014 Couchbase, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,8 +21,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
 // Name is the name used to register LowerCaseFilter in the bleve registry

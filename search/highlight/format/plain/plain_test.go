@@ -17,8 +17,8 @@ package plain
 import (
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/highlight"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/highlight"
 )
 
 func TestPlainFragmentFormatter(t *testing.T) {

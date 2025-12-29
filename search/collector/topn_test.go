@@ -21,12 +21,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/geo"
-	"github.com/blevesearch/bleve/v2/index/scorch"
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/facet"
-	"github.com/blevesearch/bleve/v2/search/searcher"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/index/scorch"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/facet"
+	"github.com/lscgzwd/tiggerdb/search/searcher"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

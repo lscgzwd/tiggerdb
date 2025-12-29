@@ -1,0 +1,112 @@
+# TigerDB 配置文件示例
+# 所有配置项都是可选的，未指定的项将使用默认值
+
+# ==================== 核心配置 ====================
+# 数据目录（所有协议共享）
+data_dir: "./data"
+
+# ==================== Elasticsearch 协议配置 ====================
+es:
+  enabled: true
+  server_config:
+    host: "0.0.0.0"
+    port: 19200
+    read_timeout: 30s
+    write_timeout: 60s
+    idle_timeout: 60s
+    max_header_bytes: 1048576
+    max_request_size: 524288000 # 500 MB
+
+# ==================== Redis 协议配置（预留）====================
+redis:
+  enabled: false
+  host: "0.0.0.0"
+  port: 6379
+
+# ==================== MySQL 协议配置（预留）====================
+mysql:
+  enabled: false
+  host: "0.0.0.0"
+  port: 3306
+
+# ==================== PostgreSQL 协议配置（预留）====================
+postgresql:
+  enabled: false
+  host: "0.0.0.0"
+  port: 5432
+
+# ==================== 日志配置 ====================
+log:
+  # 日志级别：debug, info, warn, error, silent
+  # - debug: 详细的调试信息（查询解析、索引操作等）
+  # - info: 一般信息（API 请求、服务状态等）
+  # - warn: 警告信息（非致命错误）
+  # - error: 错误信息（操作失败）
+  # - silent: 禁用所有日志
+  level: "info"
+
+  # 输出目标：stdout, stderr, 或文件路径
+  # - stdout: 标准输出（默认）
+  # - stderr: 标准错误
+  # - ./logs/tigerdb.log: 输出到文件（支持自动轮转）
+  output: "stdout"
+
+  # 日志格式：text 或 json
+  # - text: 人类可读格式（默认）
+  # - json: JSON 格式（便于日志分析工具处理）
+  format: "text"
+
+  # 是否显示调用位置（文件:行号）
+  # 开启后会显示日志来源，但会略微影响性能
+  enable_caller: false
+
+  # 是否显示时间戳
+  enable_timestamp: true
+
+  # ========== 文件轮转配置（仅当 output 为文件路径时生效）==========
+  # 单个日志文件的最大大小（MB）
+  # 达到此大小后会创建新文件
+  max_size: 100
+
+  # 保留的旧日志文件数量
+  # 超过此数量的最旧文件会被删除
+  max_backups: 3
+
+  # 保留旧日志文件的最大天数
+  # 超过此天数的文件会被删除
+  max_age: 7
+
+  # 是否压缩旧日志文件（使用 gzip）
+  compress: true
+
+# ==================== 监控配置 ====================
+metrics:
+  enabled: false
+  path: "/metrics"
+# ==================== 使用示例 ====================
+
+# 示例 1：开发环境（详细日志到控制台）
+# logging:
+#   level: "debug"
+#   output: "stdout"
+#   format: "text"
+#   enable_caller: true
+
+# 示例 2：生产环境（info 日志到文件 + 轮转）
+# logging:
+#   level: "info"
+#   output: "./logs/tigerdb.log"
+#   format: "json"
+#   max_size: 100
+#   max_backups: 7
+#   max_age: 30
+#   compress: true
+
+# 示例 3：调试模式（debug 日志到文件）
+# logging:
+#   level: "debug"
+#   output: "./logs/debug.log"
+#   format: "text"
+#   enable_caller: true
+#   enable_timestamp: true
+

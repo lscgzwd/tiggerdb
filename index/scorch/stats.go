@@ -18,7 +18,7 @@ import (
 	"reflect"
 	"sync/atomic"
 
-	"github.com/blevesearch/bleve/v2/util"
+	"github.com/lscgzwd/tiggerdb/util"
 )
 
 // Stats tracks statistics about the index, fields that are

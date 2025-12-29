@@ -18,12 +18,12 @@ import (
 	"math"
 	"regexp"
 
-	"github.com/blevesearch/bleve/v2/analysis"
-	regexpTokenizer "github.com/blevesearch/bleve/v2/analysis/tokenizer/regexp"
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/index/scorch"
-	"github.com/blevesearch/bleve/v2/index/upsidedown"
-	"github.com/blevesearch/bleve/v2/index/upsidedown/store/gtreap"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	regexpTokenizer "github.com/lscgzwd/tiggerdb/analysis/tokenizer/regexp"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/index/scorch"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown/store/gtreap"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

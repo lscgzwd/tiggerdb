@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 func formatRSFMessage(weight float64, normalizedScore float64, minScore float64, maxScore float64) string {

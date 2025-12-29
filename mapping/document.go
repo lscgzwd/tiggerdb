@@ -22,8 +22,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/blevesearch/bleve/v2/registry"
-	"github.com/blevesearch/bleve/v2/util"
+	"github.com/lscgzwd/tiggerdb/registry"
+	"github.com/lscgzwd/tiggerdb/util"
 )
 
 // A DocumentMapping describes how a type of document

@@ -15,7 +15,7 @@
 package collector
 
 import (
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 type collectStoreSlice struct {

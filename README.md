@@ -1,123 +1,215 @@
-# ![bleve](docs/bleve.png) bleve
+# TigerDB
 
-[![Tests](https://github.com/blevesearch/bleve/actions/workflows/tests.yml/badge.svg?branch=master&event=push)](https://github.com/blevesearch/bleve/actions/workflows/tests.yml?query=event%3Apush+branch%3Amaster)
-[![Coverage Status](https://coveralls.io/repos/github/blevesearch/bleve/badge.svg?branch=master)](https://coveralls.io/github/blevesearch/bleve?branch=master)
-[![Go Reference](https://pkg.go.dev/badge/github.com/blevesearch/bleve/v2.svg)](https://pkg.go.dev/github.com/blevesearch/bleve/v2)
-[![Join the chat](https://badges.gitter.im/join_chat.svg)](https://app.gitter.im/#/room/#blevesearch_bleve:gitter.im)
-[![Go Report Card](https://goreportcard.com/badge/github.com/blevesearch/bleve/v2)](https://goreportcard.com/report/github.com/blevesearch/bleve/v2)
-[![Sourcegraph](https://sourcegraph.com/github.com/blevesearch/bleve/-/badge.svg)](https://sourcegraph.com/github.com/blevesearch/bleve?badge)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Go Version](https://img.shields.io/badge/Go-1.20+-blue.svg)](https://golang.org/)
 
-A modern indexing + search library in GO
+TigerDB 是一个兼容 Elasticsearch API 的全文搜索引擎，基于 Bleve 构建。支持多协议访问，提供高性能的全文搜索和数据分析能力。
 
-## Features
+## ✨ 特性
 
-* Index any GO data structure or JSON
-* Intelligent defaults backed up by powerful configuration ([scorch](https://github.com/blevesearch/bleve/blob/master/index/scorch/README.md))
-* Supported field types:
-  * `text`, `number`, `datetime`, `boolean`, `geopoint`, `geoshape`, `IP`, `vector`
-* Supported query types:
-  * `term`, `phrase`, `match`, `match_phrase`, `prefix`, `regexp`, `wildcard`, `fuzzy`
-  * term range, numeric range, date range, boolean field
-  * compound queries: `conjuncts`, `disjuncts`, boolean (`must`/`should`/`must_not`)
-  * [query string syntax](http://www.blevesearch.com/docs/Query-String-Query/)
-  * [geo spatial search](https://github.com/blevesearch/bleve/blob/master/geo/README.md)
-  * approximate k-nearest neighbors via [vector search](https://github.com/blevesearch/bleve/blob/master/docs/vectors.md)
-  * [synonym search](https://github.com/blevesearch/bleve/blob/master/docs/synonyms.md)
-* [tf-idf](https://github.com/blevesearch/bleve/blob/master/docs/scoring.md#tf-idf) / [bm25](https://github.com/blevesearch/bleve/blob/master/docs/scoring.md#bm25) scoring models
-* Hybrid search: exact + semantic
-  * Supports [RRF (Reciprocal Rank Fusion) and RSF (Relative Score Fusion)](docs/score_fusion.md)
-* [Result pagination](https://github.com/blevesearch/bleve/blob/master/docs/pagination.md)
-* Query time boosting
-* Search result match highlighting with document fragments
-* Aggregations/faceting support:
-  * terms facet
-  * numeric range facet
-  * date range facet
+- 🔍 **Elasticsearch API 兼容**：支持大部分 ES 7.x Query DSL
+- 🚀 **高性能**：基于 Bleve，纯 Go 实现，无外部依赖
+- 🔌 **多协议支持**：ES、Redis、MySQL、PostgreSQL（部分预留）
+- 📊 **查询优化**：保守的查询优化器，确保不产生负优化
+- 📝 **完善的日志系统**：多级别、多输出、自动轮转
+- ⚙️ **灵活配置**：配置文件、环境变量、命令行参数
+- 🛡️ **生产就绪**：完善的错误处理、监控指标、健康检查
 
-## Indexing
+## 🚀 快速开始
 
-```go
-message := struct {
-    Id   string
-    From string
-    Body string
-}{
-    Id:   "example",
-    From: "xyz@couchbase.com",
-    Body: "bleve indexing is easy",
-}
-
-mapping := bleve.NewIndexMapping()
-index, err := bleve.New("example.bleve", mapping)
-if err != nil {
-    panic(err)
-}
-index.Index(message.Id, message)
-```
-
-## Querying
-
-```go
-index, _ := bleve.Open("example.bleve")
-query := bleve.NewQueryStringQuery("bleve")
-searchRequest := bleve.NewSearchRequest(query)
-searchResult, _ := index.Search(searchRequest)
-```
-
-## Command Line Interface
-
-To install the CLI for the latest release of bleve, run:
+### 安装
 
 ```bash
-go install github.com/blevesearch/bleve/v2/cmd/bleve@latest
+# 克隆代码
+git clone https://github.com/lscgzwd/tigerdb.git
+cd tigerdb
+
+# 构建
+go build -o tigerdb ./cmd/tigerdb
+
+# 运行
+./tigerdb
 ```
 
-```text
-$ bleve --help
-Bleve is a command-line tool to interact with a bleve index.
+### 基本使用
 
-Usage:
-  bleve [command]
+```bash
+# 创建索引
+curl -X PUT "localhost:19200/my_index" -H 'Content-Type: application/json' -d'
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "title": { "type": "text" },
+      "age": { "type": "integer" }
+    }
+  }
+}'
 
-Available Commands:
-  bulk        bulk loads from newline delimited JSON files
-  check       checks the contents of the index
-  count       counts the number documents in the index
-  create      creates a new index
-  dictionary  prints the term dictionary for the specified field in the index
-  dump        dumps the contents of the index
-  fields      lists the fields in this index
-  help        Help about any command
-  index       adds the files to the index
-  mapping     prints the mapping used for this index
-  query       queries the index
-  registry    registry lists the bleve components compiled into this executable
-  scorch      command-line tool to interact with a scorch index
+# 索引文档
+curl -X POST "localhost:19200/my_index/_doc/1" -H 'Content-Type: application/json' -d'
+{
+  "title": "Hello TigerDB",
+  "age": 25
+}'
 
-Flags:
-  -h, --help   help for bleve
-
-Use "bleve [command] --help" for more information about a command.
+# 搜索文档
+curl -X GET "localhost:19200/my_index/_search" -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "match": {
+      "title": "TigerDB"
+    }
+  }
+}'
 ```
 
-## Text Analysis
+## 📖 文档
 
-Bleve includes general-purpose analyzers (customizable) as well as pre-built text analyzers for the following languages:
+### 核心文档
 
-Arabic (ar), Bulgarian (bg), Catalan (ca), Chinese-Japanese-Korean (cjk), Kurdish (ckb), Danish (da), German (de), Greek (el), English (en), Spanish - Castilian (es), Basque (eu), Persian (fa), Finnish (fi), French (fr), Gaelic (ga), Spanish - Galician (gl), Hindi (hi), Croatian (hr), Hungarian (hu), Armenian (hy), Indonesian (id, in), Italian (it), Dutch (nl), Norwegian (no), Polish (pl), Portuguese (pt), Romanian (ro), Russian (ru), Swedish (sv), Turkish (tr)
+- [架构文档](ARCHITECTURE.md) - 系统架构、模块设计、技术决策
+- [配置系统](config/README.md) - 配置说明、优先级、示例
+- [日志系统](docs/LOGGING.md) - 日志级别、输出配置、使用指南
 
-## Text Analysis Wizard
+### 功能文档
 
-[bleveanalysis.couchbase.com](https://bleveanalysis.couchbase.com)
+- [查询优化器](docs/QUERY_OPTIMIZER_ARCHITECTURE.md) - 优化策略、性能保证
+- [嵌套文档](docs/nested_documents_examples.md) - 嵌套查询示例
+- [地理查询](docs/geo.md) - 地理位置查询
+- [向量搜索](docs/vectors.md) - 向量相似度搜索
+- [同义词](docs/synonyms.md) - 同义词配置
+- [评分融合](docs/score_fusion.md) - 多查询评分融合
 
-## Discussion/Issues
+### 配置文件
 
-Discuss usage/development of bleve and/or report issues here:
+- [配置示例](config/config.example.yaml) - 完整的配置示例
 
-* [Github issues](https://github.com/blevesearch/bleve/issues)
-* [Google group](https://groups.google.com/forum/#!forum/bleve)
+## 🔧 配置
 
-## License
+### 配置文件
 
-Apache License Version 2.0
+创建 `config.yaml`：
+
+```yaml
+# 数据目录
+data_dir: "./data"
+
+# Elasticsearch 协议
+es:
+  enabled: true
+  host: "0.0.0.0"
+  port: 19200
+
+# 日志配置
+logging:
+  level: "info"
+  output: "stdout"
+  format: "text"
+```
+
+### 环境变量
+
+```bash
+export TIGERDB_DATA_DIR=./data
+export LOG_LEVEL=debug
+export LOG_OUTPUT=./logs/tigerdb.log
+```
+
+### 命令行参数
+
+```bash
+./tigerdb --config config.yaml --data-dir ./data --es-port 19200
+```
+
+**配置优先级**：命令行 > 环境变量 > 配置文件 > 默认值
+
+## 📊 性能
+
+| 操作     | 性能              |
+| -------- | ----------------- |
+| 简单查询 | < 10ms            |
+| 复合查询 | < 50ms            |
+| 批量索引 | > 1000 docs/s     |
+| 内存占用 | < 500MB（小索引） |
+
+## 🔍 支持的查询类型
+
+### 全文搜索
+
+- `match`, `match_all`, `match_phrase`
+- `multi_match`, `query_string`
+
+### 词条查询
+
+- `term`, `terms`, `exists`, `ids`
+- `prefix`, `wildcard`, `regexp`, `fuzzy`
+
+### 复合查询
+
+- `bool` (must/should/must_not/filter)
+- `dis_max`, `boosting`
+
+### 范围查询
+
+- `range` (支持数字、日期、字符串)
+
+### 地理查询
+
+- `geo_bounding_box`, `geo_distance`
+
+### 特殊查询
+
+- `nested` (嵌套文档查询)
+
+## 🛠️ 开发
+
+### 构建
+
+```bash
+go build ./cmd/tigerdb
+```
+
+### 运行测试
+
+```bash
+go test ./...
+```
+
+### 开发模式
+
+```bash
+LOG_LEVEL=debug ./tigerdb
+```
+
+## 📦 依赖
+
+- Go 1.20+
+- github.com/blevesearch/bleve_index_api
+- github.com/gorilla/mux
+- gopkg.in/natefinch/lumberjack.v2
+
+## 🤝 贡献
+
+欢迎贡献代码！请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## 📄 许可证
+
+Apache License 2.0 - 详见 [LICENSE](LICENSE)
+
+## 🔗 相关链接
+
+- [Bleve](https://github.com/blevesearch/bleve) - 底层搜索引擎
+- [Elasticsearch](https://www.elastic.co/) - API 兼容目标
+
+## 📮 联系方式
+
+- Issue: https://github.com/lscgzwd/tigerdb/issues
+- Email: lscgzwd@gmail.com
+
+---
+
+**TigerDB** - 高性能、易部署的全文搜索引擎

@@ -15,9 +15,9 @@
 package pl
 
 import (
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/analysis/lang/pl/stempel"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis/lang/pl/stempel"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
 const SnowballStemmerName = "stemmer_pl"

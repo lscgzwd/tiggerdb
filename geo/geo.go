@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/blevesearch/bleve/v2/numeric"
+	"github.com/lscgzwd/tiggerdb/numeric"
 )
 
 // GeoBits is the number of bits used for a single geo point

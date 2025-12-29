@@ -25,23 +25,23 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/blevesearch/bleve/v2/analysis/datetime/timestamp/microseconds"
-	"github.com/blevesearch/bleve/v2/analysis/datetime/timestamp/milliseconds"
-	"github.com/blevesearch/bleve/v2/analysis/datetime/timestamp/nanoseconds"
-	"github.com/blevesearch/bleve/v2/analysis/datetime/timestamp/seconds"
-	"github.com/blevesearch/bleve/v2/document"
-	"github.com/blevesearch/bleve/v2/index/scorch"
-	"github.com/blevesearch/bleve/v2/index/upsidedown"
-	"github.com/blevesearch/bleve/v2/mapping"
-	"github.com/blevesearch/bleve/v2/registry"
-	"github.com/blevesearch/bleve/v2/search"
-	"github.com/blevesearch/bleve/v2/search/collector"
-	"github.com/blevesearch/bleve/v2/search/facet"
-	"github.com/blevesearch/bleve/v2/search/highlight"
-	"github.com/blevesearch/bleve/v2/search/query"
-	"github.com/blevesearch/bleve/v2/util"
 	index "github.com/blevesearch/bleve_index_api"
 	"github.com/blevesearch/geo/s2"
+	"github.com/lscgzwd/tiggerdb/analysis/datetime/timestamp/microseconds"
+	"github.com/lscgzwd/tiggerdb/analysis/datetime/timestamp/milliseconds"
+	"github.com/lscgzwd/tiggerdb/analysis/datetime/timestamp/nanoseconds"
+	"github.com/lscgzwd/tiggerdb/analysis/datetime/timestamp/seconds"
+	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/index/scorch"
+	"github.com/lscgzwd/tiggerdb/index/upsidedown"
+	"github.com/lscgzwd/tiggerdb/mapping"
+	"github.com/lscgzwd/tiggerdb/registry"
+	"github.com/lscgzwd/tiggerdb/search"
+	"github.com/lscgzwd/tiggerdb/search/collector"
+	"github.com/lscgzwd/tiggerdb/search/facet"
+	"github.com/lscgzwd/tiggerdb/search/highlight"
+	"github.com/lscgzwd/tiggerdb/search/query"
+	"github.com/lscgzwd/tiggerdb/util"
 )
 
 type indexImpl struct {
@@ -745,7 +745,6 @@ func (i *indexImpl) SearchInContext(ctx context.Context, req *SearchRequest) (sr
 	if !contextScoreFusionKeyExists {
 		setKnnHitsInCollector(knnHits, req, coll)
 	}
-	
 
 	if fts != nil {
 		if is, ok := indexReader.(*scorch.IndexSnapshot); ok {

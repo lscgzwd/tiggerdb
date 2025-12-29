@@ -17,7 +17,7 @@ package fusion
 import (
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 func TestRelativeScoreFusion(t *testing.T) {

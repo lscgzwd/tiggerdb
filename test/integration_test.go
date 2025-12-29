@@ -25,11 +25,11 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2"
-	"github.com/blevesearch/bleve/v2/mapping"
+	"github.com/lscgzwd/tiggerdb"
+	"github.com/lscgzwd/tiggerdb/mapping"
 
 	// allow choosing alternate kvstores
-	_ "github.com/blevesearch/bleve/v2/config"
+	_ "github.com/lscgzwd/tiggerdb/config"
 )
 
 var dataset = flag.String("dataset", "", "only test datasets matching this regex")

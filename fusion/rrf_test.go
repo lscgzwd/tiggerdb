@@ -19,7 +19,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/search"
 )
 
 const epsilon float64 = 1e-3

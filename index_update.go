@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/blevesearch/bleve/v2/mapping"
 	index "github.com/blevesearch/bleve_index_api"
+	"github.com/lscgzwd/tiggerdb/mapping"
 )
 
 // Store all the fields that interact with the data
@@ -199,7 +199,11 @@ func checkUpdatedMapping(ori, upd *mapping.DocumentMapping) error {
 			}
 		}
 		if oriFMapping == nil {
-			return fmt.Errorf("updated index mapping contains new fields")
+			fieldName := updFMapping.Name
+			if fieldName == "" {
+				fieldName = "<unnamed>"
+			}
+			return fmt.Errorf("updated index mapping contains new field '%s' that does not exist in original mapping", fieldName)
 		}
 	}
 
@@ -442,14 +446,27 @@ func addFieldInfo(fInfo map[string]*index.UpdateFieldInfo, ori, upd *pathInfo) e
 			// Compare analyser, datetime parser and synonym source before comparing
 			// the field mapping as it might not have this information
 			if updAnalyser != "" && oriFMapInfo.analyzer != updAnalyser {
-				return fmt.Errorf("analyser has been changed for a text field")
+				fieldName := oriFMapInfo.fieldMapping.Name
+				if fieldName == "" {
+					fieldName = ori.path
+				}
+				return fmt.Errorf("analyser has been changed for text field '%s' at path '%s'", fieldName, ori.path)
 			}
 			if updDatetimeParser != "" && oriFMapInfo.datetimeParser != updDatetimeParser {
-				return fmt.Errorf("datetime parser has been changed for a date time field")
+				fieldName := oriFMapInfo.fieldMapping.Name
+				if fieldName == "" {
+					fieldName = ori.path
+				}
+				return fmt.Errorf("datetime parser has been changed for datetime field '%s' at path '%s'", fieldName, ori.path)
 			}
 			info, err = compareFieldMapping(oriFMapInfo.fieldMapping, updFMap)
 			if err != nil {
-				return err
+				// 增强错误信息，包含字段路径信息
+				fieldName := oriFMapInfo.fieldMapping.Name
+				if fieldName == "" {
+					fieldName = ori.path
+				}
+				return fmt.Errorf("field '%s' at path '%s': %w", fieldName, ori.path, err)
 			}
 
 			// Validate to ensure change is possible
@@ -486,7 +503,11 @@ func compareFieldMapping(original, updated *mapping.FieldMapping) (*index.Update
 		}
 		return nil, fmt.Errorf("deleted field present in '_all' field")
 	} else if original == nil {
-		return nil, fmt.Errorf("matching field not found in original index mapping")
+		fieldName := updated.Name
+		if fieldName == "" {
+			fieldName = "<unnamed>"
+		}
+		return nil, fmt.Errorf("field '%s' does not exist in original index mapping", fieldName)
 	}
 
 	if original.Type != updated.Type {

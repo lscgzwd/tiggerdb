@@ -15,11 +15,11 @@
 package web
 
 import (
-	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/blevesearch/bleve/v2/analysis/lang/en"
-	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
-	"github.com/blevesearch/bleve/v2/analysis/tokenizer/web"
-	"github.com/blevesearch/bleve/v2/registry"
+	"github.com/lscgzwd/tiggerdb/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis/lang/en"
+	"github.com/lscgzwd/tiggerdb/analysis/token/lowercase"
+	"github.com/lscgzwd/tiggerdb/analysis/tokenizer/web"
+	"github.com/lscgzwd/tiggerdb/registry"
 )
 
 const Name = "web"

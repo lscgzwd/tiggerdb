@@ -17,8 +17,8 @@ package query
 import (
 	"context"
 
-	"github.com/blevesearch/bleve/v2/mapping"
-	"github.com/blevesearch/bleve/v2/search"
+	"github.com/lscgzwd/tiggerdb/mapping"
+	"github.com/lscgzwd/tiggerdb/search"
 	index "github.com/blevesearch/bleve_index_api"
 )
 

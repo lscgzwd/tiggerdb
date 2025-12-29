@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/blevesearch/bleve/v2/analysis"
+	"github.com/lscgzwd/tiggerdb/analysis"
 )
 
 func TestReverseFilter(t *testing.T) {
@@ -40,7 +40,7 @@ func TestReverseFilter(t *testing.T) {
 			Term: []byte("what's this in reverse"),
 		},
 		&analysis.Token{
-			Term: []byte("œ∑´®†"),
+			Term: []byte("œ∑´®�?),
 		},
 		&analysis.Token{
 			Term: []byte("İȺȾCAT÷≥≤µ123"),

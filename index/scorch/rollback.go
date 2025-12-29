@@ -19,7 +19,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/blevesearch/bleve/v2/util"
+	"github.com/lscgzwd/tiggerdb/util"
 	bolt "go.etcd.io/bbolt"
 )
 
