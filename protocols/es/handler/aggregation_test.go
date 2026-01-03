@@ -21,10 +21,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	bleve "github.com/lscgzwd/tiggerdb"
+	"github.com/lscgzwd/tiggerdb/directory"
 	"github.com/lscgzwd/tiggerdb/mapping"
+	"github.com/lscgzwd/tiggerdb/metadata"
+	esIndex "github.com/lscgzwd/tiggerdb/protocols/es/index"
 )
 
 // setupAggregationTestEnv 创建聚合测试环境
@@ -34,11 +38,78 @@ func setupAggregationTestEnv(t *testing.T) (*DocumentHandler, bleve.Index, func(
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	idx, err := bleve.New(tempDir, mapping.NewIndexMapping())
+	// 创建目录管理器
+	dirConfig := directory.DefaultDirectoryConfig(tempDir)
+	dirMgr, err := directory.NewDirectoryManager(dirConfig)
 	if err != nil {
+		os.RemoveAll(tempDir)
+		t.Fatalf("Failed to create directory manager: %v", err)
+	}
+
+	// 创建测试索引目录
+	indexName := "test_agg_index"
+	if err := dirMgr.CreateIndex(indexName); err != nil {
+		dirMgr.Cleanup()
+		os.RemoveAll(tempDir)
+		t.Fatalf("Failed to create index directory: %v", err)
+	}
+
+	// 获取索引路径
+	indexPath := dirMgr.GetIndexPath(indexName)
+	if indexPath == "" {
+		dirMgr.DeleteIndex(indexName)
+		dirMgr.Cleanup()
+		os.RemoveAll(tempDir)
+		t.Fatalf("Failed to get index path")
+	}
+
+	// 在正确的位置创建索引
+	storePath := indexPath + "/store"
+	idx, err := bleve.New(storePath, mapping.NewIndexMapping())
+	if err != nil {
+		dirMgr.DeleteIndex(indexName)
+		dirMgr.Cleanup()
 		os.RemoveAll(tempDir)
 		t.Fatalf("Failed to create index: %v", err)
 	}
+
+	// 创建元数据存储
+	metaConfig := &metadata.MetadataStoreConfig{
+		StorageType:      "file",
+		FilePath:         tempDir + "/meta",
+		EnableCache:      true,
+		EnableVersioning: true,
+	}
+	metaStore, err := metadata.NewFileMetadataStore(metaConfig)
+	if err != nil {
+		idx.Close()
+		dirMgr.DeleteIndex(indexName)
+		dirMgr.Cleanup()
+		os.RemoveAll(tempDir)
+		t.Fatalf("Failed to create metadata store: %v", err)
+	}
+
+	// 创建索引元数据
+	indexMeta := &metadata.IndexMetadata{
+		Name:      indexName,
+		Mapping:   map[string]interface{}{},
+		Settings:  map[string]interface{}{},
+		Aliases:   []string{},
+		Version:   1,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := metaStore.SaveIndexMetadata(indexName, indexMeta); err != nil {
+		idx.Close()
+		metaStore.Close()
+		dirMgr.DeleteIndex(indexName)
+		dirMgr.Cleanup()
+		os.RemoveAll(tempDir)
+		t.Fatalf("Failed to save index metadata: %v", err)
+	}
+
+	// 创建索引管理器
+	indexMgr := esIndex.NewIndexManager(dirMgr, metaStore)
 
 	// 索引测试数据
 	testDocs := []struct {
@@ -143,21 +214,26 @@ func setupAggregationTestEnv(t *testing.T) (*DocumentHandler, bleve.Index, func(
 		},
 	}
 
+	// 索引测试数据
 	for _, td := range testDocs {
 		if err := idx.Index(td.id, td.data); err != nil {
 			idx.Close()
+			metaStore.Close()
+			dirMgr.DeleteIndex(indexName)
+			dirMgr.Cleanup()
 			os.RemoveAll(tempDir)
 			t.Fatalf("Failed to index document %s: %v", td.id, err)
 		}
 	}
 
 	// 创建 DocumentHandler
-	handler := NewDocumentHandler(map[string]bleve.Index{
-		"test_agg_index": idx,
-	})
+	handler := NewDocumentHandler(indexMgr, dirMgr, metaStore)
 
 	cleanup := func() {
 		idx.Close()
+		metaStore.Close()
+		dirMgr.DeleteIndex(indexName)
+		dirMgr.Cleanup()
 		os.RemoveAll(tempDir)
 	}
 

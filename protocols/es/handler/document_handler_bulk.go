@@ -16,14 +16,13 @@ package handler
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"github.com/lscgzwd/tiggerdb/logger"
 	"net/http"
-	"strings"
 	"time"
+
+	"github.com/lscgzwd/tiggerdb/logger"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -55,15 +54,6 @@ type BulkResponse struct {
 func (h *DocumentHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	// 检查URL中是否包含索引名称（/{index}/_bulk格式）
 	defaultIndex := mux.Vars(r)["index"]
-	// 读取请求体（移除DEBUG日志以提高性能）
-	bodyBytes, readErr := io.ReadAll(r.Body)
-	if readErr != nil {
-		logger.Error("Failed to read bulk request body: %v", readErr)
-		common.HandleError(w, common.NewBadRequestError("failed to read request body: "+readErr.Error()))
-		return
-	}
-	// 重新设置body以便后续处理
-	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// 检查Content-Type
 	contentType := r.Header.Get("Content-Type")
@@ -72,40 +62,60 @@ func (h *DocumentHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 检查请求体大小（兼容 chunked，可选：io.LimitReader 强制限制）
-
-	// 读取请求体
+	// P2-3: 流式解析Bulk JSON（不先读取整个body到内存，支持超大文件）
+	// 性能优化：使用bufio.NewReader + json.Decoder组合，实现高效的流式JSON解析
+	// 优势：
+	// 1. 避免将整个body读取到内存（支持超大文件，如500MB+）
+	// 2. 使用json.Decoder解析每一行，减少内存分配和字符串转换开销
+	// 3. 比json.Unmarshal([]byte(line))更高效，因为Decoder可以复用缓冲区
 	reader := bufio.NewReader(r.Body)
 	defer r.Body.Close()
+	decoder := json.NewDecoder(reader)
 
 	// 解析批量操作
 	bulkItems := make([]BulkRequest, 0)
 	lineNum := 0
 
 	for {
-		line, err := reader.ReadString('\n')
+		// 使用json.Decoder解析每一行JSON
+		// 注意：ES Bulk API使用NDJSON格式，每行是独立的JSON对象
+		// 性能优化：使用json.Decoder比ReadString + json.Unmarshal更高效，因为：
+		// 1. Decoder可以复用内部缓冲区，减少内存分配
+		// 2. 自动跳过空白字符，无需手动TrimSpace
+		// 3. 直接解析到目标结构，减少中间字符串转换
+		var jsonLine map[string]interface{}
+		err := decoder.Decode(&jsonLine)
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			logger.Error("Failed to read bulk request line %d: %v", lineNum, err)
-			common.HandleError(w, common.NewBadRequestError(fmt.Sprintf("failed to read bulk request: %v", err)))
+			// 检查是否是JSON语法错误（可能是空行或格式错误）
+			if syntaxErr, ok := err.(*json.SyntaxError); ok {
+				// JSON语法错误，可能是空行或格式错误
+				// 对于NDJSON格式，尝试跳过当前行并继续解析下一行
+				// 读取并丢弃当前行的剩余部分（直到换行符）
+				if syntaxErr.Offset > 0 {
+					// 尝试读取到换行符
+					_, readErr := reader.ReadString('\n')
+					if readErr != nil && readErr != io.EOF {
+						logger.Error("Failed to skip invalid JSON line %d: %v", lineNum, readErr)
+						common.HandleError(w, common.NewBadRequestError(fmt.Sprintf("failed to parse JSON line %d: %v", lineNum, err)))
+						return
+					}
+				}
+				lineNum++
+				continue
+			}
+			logger.Error("Failed to parse JSON line %d: %v", lineNum, err)
+			common.HandleError(w, common.NewBadRequestError(fmt.Sprintf("failed to parse JSON line %d: %v", lineNum, err)))
 			return
-		}
-
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
 		}
 
 		lineNum++
 
-		// 解析JSON行
-		var jsonLine map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &jsonLine); err != nil {
-			logger.Error("Failed to parse JSON line %d: %v", lineNum, err)
-			common.HandleError(w, common.NewBadRequestError(fmt.Sprintf("failed to parse JSON line %d: %v", lineNum, err)))
-			return
+		// 跳过空对象
+		if len(jsonLine) == 0 {
+			continue
 		}
 
 		// 判断是操作行还是数据行
@@ -378,31 +388,75 @@ func (h *DocumentHandler) executeBulkOperationsBatch(idx bleve.Index, indexName 
 					// 根据操作类型确定 result 和 status
 					result := "created"
 					status := http.StatusCreated
+
+					// P1-1: 使用版本管理器管理版本信息
+					var versionInfo *DocumentVersion
 					if op.item.Action == "update" {
-						result = "updated"
-						status = http.StatusOK
+						// update操作：检查文档是否存在，决定是创建还是更新
+						existingDoc, _ := idx.Document(op.item.ID)
+						if existingDoc != nil {
+							// 文档存在，递增版本
+							versionInfo = h.versionMgr.IncrementVersion(indexName, op.item.ID)
+							result = "updated"
+							status = http.StatusOK
+						} else {
+							// 文档不存在，创建新版本
+							versionInfo = h.versionMgr.CreateVersion(indexName, op.item.ID)
+							result = "created"
+							status = http.StatusCreated
+						}
+					} else {
+						// create/index操作：检查文档是否存在
+						existingDoc, _ := idx.Document(op.item.ID)
+						if existingDoc != nil {
+							// 文档存在，递增版本
+							versionInfo = h.versionMgr.IncrementVersion(indexName, op.item.ID)
+							result = "updated"
+							status = http.StatusOK
+						} else {
+							// 文档不存在，创建新版本
+							versionInfo = h.versionMgr.CreateVersion(indexName, op.item.ID)
+							result = "created"
+							status = http.StatusCreated
+						}
 					}
 
 					opResult = map[string]interface{}{
 						"_index":        indexName,
 						"_id":           op.item.ID,
-						"_version":      1,
+						"_version":      versionInfo.Version,
 						"result":        result,
 						"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
-						"_seq_no":       0,
-						"_primary_term": 1,
+						"_seq_no":       versionInfo.SeqNo,
+						"_primary_term": versionInfo.PrimaryTerm,
 						"status":        status,
 					}
 				} else if op.delete {
-					opResult = map[string]interface{}{
-						"_index":        indexName,
-						"_id":           op.item.ID,
-						"_version":      1,
-						"result":        "deleted",
-						"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
-						"_seq_no":       0,
-						"_primary_term": 1,
-						"status":        http.StatusOK,
+					// P1-1: 获取删除前的版本信息
+					versionInfo := h.versionMgr.DeleteVersion(indexName, op.item.ID)
+					if versionInfo == nil {
+						// 文档不存在，返回not_found
+						opResult = map[string]interface{}{
+							"_index":        indexName,
+							"_id":           op.item.ID,
+							"_version":      0,
+							"result":        "not_found",
+							"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
+							"_seq_no":       0,
+							"_primary_term": 1,
+							"status":        http.StatusOK,
+						}
+					} else {
+						opResult = map[string]interface{}{
+							"_index":        indexName,
+							"_id":           op.item.ID,
+							"_version":      versionInfo.Version,
+							"result":        "deleted",
+							"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
+							"_seq_no":       versionInfo.SeqNo,
+							"_primary_term": versionInfo.PrimaryTerm,
+							"status":        http.StatusOK,
+						}
 					}
 				}
 

@@ -416,11 +416,37 @@ func (h *IndexHandler) convertESMappingToBleve(esMapping map[string]interface{})
 			fieldDocMapping := mapping.NewDocumentMapping()
 
 			// 转换字段类型和属性
-			if err := h.convertESFieldToBleve(fieldMap, fieldDocMapping); err != nil {
+			if err := h.convertESFieldToBleve(fieldMap, fieldDocMapping, fieldName); err != nil {
 				return nil, fmt.Errorf("failed to convert field %s: %w", fieldName, err)
 			}
 
 			defaultMapping.Properties[fieldName] = fieldDocMapping
+
+			// P2-4: 处理multi-fields（一个字段多种分词方式）
+			// ES格式: {"title": {"type": "text", "fields": {"keyword": {"type": "keyword"}, "english": {"type": "text", "analyzer": "english"}}}}
+			if fields, ok := fieldMap["fields"].(map[string]interface{}); ok {
+				// 为每个multi-field创建子字段映射
+				// 字段名格式：fieldName.subFieldName（如 title.keyword）
+				for subFieldName, subFieldDef := range fields {
+					subFieldMap, ok := subFieldDef.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					// 创建子字段的DocumentMapping
+					subFieldDocMapping := mapping.NewDocumentMapping()
+					// 递归处理子字段（支持嵌套的multi-fields）
+					subFieldFullName := fieldName + "." + subFieldName
+					if err := h.convertESFieldToBleve(subFieldMap, subFieldDocMapping, subFieldFullName); err != nil {
+						logger.Warn("Failed to convert multi-field [%s.%s]: %v", fieldName, subFieldName, err)
+						continue
+					}
+					// 将子字段添加到当前字段的Properties中
+					if fieldDocMapping.Properties == nil {
+						fieldDocMapping.Properties = make(map[string]*mapping.DocumentMapping)
+					}
+					fieldDocMapping.Properties[subFieldName] = subFieldDocMapping
+				}
+			}
 		}
 	}
 
@@ -516,7 +542,8 @@ func (h *IndexHandler) registerDateTimeParser(bleveMapping *mapping.IndexMapping
 }
 
 // convertESFieldToBleve 将 ES 字段定义转换为 Bleve FieldMapping
-func (h *IndexHandler) convertESFieldToBleve(fieldMap map[string]interface{}, docMapping *mapping.DocumentMapping) error {
+// fieldName 用于处理multi-fields时的完整字段名（如 "title.keyword"）
+func (h *IndexHandler) convertESFieldToBleve(fieldMap map[string]interface{}, docMapping *mapping.DocumentMapping, fieldName string) error {
 	fieldType, ok := fieldMap["type"].(string)
 	if !ok {
 		// 如果没有 type，默认为 text
@@ -573,7 +600,8 @@ func (h *IndexHandler) convertESFieldToBleve(fieldMap map[string]interface{}, do
 					continue
 				}
 				propDocMapping := mapping.NewDocumentMapping()
-				if err := h.convertESFieldToBleve(propMap, propDocMapping); err != nil {
+				propFullName := fieldName + "." + propName
+				if err := h.convertESFieldToBleve(propMap, propDocMapping, propFullName); err != nil {
 					return fmt.Errorf("failed to convert nested field %s: %w", propName, err)
 				}
 				docMapping.Properties[propName] = propDocMapping
@@ -611,6 +639,12 @@ func (h *IndexHandler) convertESFieldToBleve(fieldMap map[string]interface{}, do
 	if docValues, ok := fieldMap["doc_values"].(bool); ok {
 		fieldMapping.DocValues = docValues
 	}
+
+	// P2-4: 处理copy_to（字段复制）
+	// ES格式: {"first_name": {"type": "text", "copy_to": "full_name"}}
+	// 注意：Bleve不直接支持copy_to，我们通过索引时复制字段值来实现
+	// copy_to配置会从mapping中提取，在索引文档时应用
+	// 这里不需要特殊处理，copy_to信息保留在ES mapping中，索引时从元数据读取
 
 	// 添加到 DocumentMapping
 	docMapping.AddFieldMapping(fieldMapping)

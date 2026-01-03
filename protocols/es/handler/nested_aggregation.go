@@ -37,32 +37,36 @@ func (h *DocumentHandler) buildNestedAggregationsForBucket(
 
 	logger.Debug("buildNestedAggregationsForBucket: parentAgg=[%s], bucketKey=%v, subAggs count=%d", parentAggName, bucketKey, len(subAggs))
 
-	// 解析子聚合配置
-	facets, metricsInfo, compositeInfo, nestedInfo, _, topHitsInfo, nestedFieldInfo, err := h.parseAggregations(subAggs)
+	// P2-1: 使用结构体封装返回值
+	parsedSubAggs, err := h.parseAggregations(subAggs)
 	if err != nil {
 		logger.Warn("Failed to parse nested aggregations for bucket [%s]: %v", parentAggName, err)
 		return nil
 	}
 
+	if parsedSubAggs == nil {
+		return nil
+	}
+
 	metricsCount := 0
-	if metricsInfo != nil {
-		metricsCount = len(metricsInfo.Aggregations)
+	if parsedSubAggs.MetricsInfo != nil {
+		metricsCount = len(parsedSubAggs.MetricsInfo.Aggregations)
 	}
 	compositeCount := 0
-	if compositeInfo != nil {
-		compositeCount = len(compositeInfo.Aggregations)
+	if parsedSubAggs.CompositeInfo != nil {
+		compositeCount = len(parsedSubAggs.CompositeInfo.Aggregations)
 	}
 	nestedCount := 0
-	if nestedInfo != nil {
-		nestedCount = len(nestedInfo.SubAggregations)
+	if parsedSubAggs.NestedInfo != nil {
+		nestedCount = len(parsedSubAggs.NestedInfo.SubAggregations)
 	}
-	logger.Debug("buildNestedAggregationsForBucket: parsed facets=%d, metrics=%d, composite=%d, nested=%d", len(facets), metricsCount, compositeCount, nestedCount)
+	logger.Debug("buildNestedAggregationsForBucket: parsed facets=%d, metrics=%d, composite=%d, nested=%d", len(parsedSubAggs.Facets), metricsCount, compositeCount, nestedCount)
 
 	// 创建搜索请求
 	searchReq := bleve.NewSearchRequest(bucketQuery)
 	searchReq.Size = 0 // 不需要返回文档，只需要聚合结果
-	if len(facets) > 0 {
-		searchReq.Facets = facets
+	if len(parsedSubAggs.Facets) > 0 {
+		searchReq.Facets = parsedSubAggs.Facets
 	}
 
 	// 执行搜索
@@ -77,15 +81,15 @@ func (h *DocumentHandler) buildNestedAggregationsForBucket(
 
 	// 处理bucket聚合（terms, range, date_range）
 	if len(searchResult.Facets) > 0 {
-		facetAggs := h.buildAggregations(searchResult.Facets, compositeInfo, nestedInfo, topHitsInfo, nestedFieldInfo, idx, bucketQuery)
+		facetAggs := h.buildAggregations(searchResult.Facets, parsedSubAggs.CompositeInfo, parsedSubAggs.NestedInfo, parsedSubAggs.TopHitsInfo, parsedSubAggs.NestedFieldInfo, idx, bucketQuery)
 		for k, v := range facetAggs {
 			result[k] = v
 		}
 	}
 
 	// 处理top_hits聚合
-	if topHitsInfo != nil && len(topHitsInfo.Aggregations) > 0 {
-		for topHitsName, topHitsConfig := range topHitsInfo.Aggregations {
+	if parsedSubAggs.TopHitsInfo != nil && len(parsedSubAggs.TopHitsInfo.Aggregations) > 0 {
+		for topHitsName, topHitsConfig := range parsedSubAggs.TopHitsInfo.Aggregations {
 			topHitsResult := h.buildTopHitsAggregation(topHitsConfig, idx, bucketQuery)
 			if topHitsResult != nil {
 				result[topHitsName] = topHitsResult
@@ -94,8 +98,8 @@ func (h *DocumentHandler) buildNestedAggregationsForBucket(
 	}
 
 	// 处理nested字段聚合
-	if nestedFieldInfo != nil && len(nestedFieldInfo.Aggregations) > 0 {
-		for nestedFieldName, nestedFieldConfig := range nestedFieldInfo.Aggregations {
+	if parsedSubAggs.NestedFieldInfo != nil && len(parsedSubAggs.NestedFieldInfo.Aggregations) > 0 {
+		for nestedFieldName, nestedFieldConfig := range parsedSubAggs.NestedFieldInfo.Aggregations {
 			logger.Debug("buildNestedAggregationsForBucket: processing nested field aggregation [%s], path=[%s]", nestedFieldName, nestedFieldConfig.Path)
 			// 在bucket查询范围内执行nested字段聚合
 			nestedFieldAggs := h.buildNestedFieldAggregations(&NestedFieldAggregationInfo{
@@ -110,21 +114,81 @@ func (h *DocumentHandler) buildNestedAggregationsForBucket(
 	}
 
 	// 处理metrics聚合
-	if metricsInfo != nil && len(metricsInfo.Aggregations) > 0 {
+	if parsedSubAggs.MetricsInfo != nil && len(parsedSubAggs.MetricsInfo.Aggregations) > 0 {
+		// 性能优化：使用Fields机制，在搜索时直接获取需要的字段，避免搜索后再获取文档
+		// 这比搜索后再逐个获取文档更高效，因为：
+		// 1. 字段数据已经在hit.Fields中，类型已转换好
+		// 2. 避免了Document()调用的开销
+		// 3. Bleve内部可能对Reader有优化和复用
+		var metricsAggs map[string]interface{}
+		var err error
+
+		// 收集所有metrics聚合需要的字段
+		fieldsNeeded := make(map[string]bool)
+		fieldsList := make([]string, 0)
+		for _, spec := range parsedSubAggs.MetricsInfo.Aggregations {
+			if spec.Field != "" && !fieldsNeeded[spec.Field] {
+				fieldsNeeded[spec.Field] = true
+				fieldsList = append(fieldsList, spec.Field)
+			}
+		}
+
 		// 获取所有匹配的文档来计算metrics
 		allDocsReq := bleve.NewSearchRequest(bucketQuery)
 		allDocsReq.Size = 10000 // 限制大小，避免内存问题
+		if len(fieldsList) > 0 {
+			// 使用Fields机制，让Bleve在搜索时自动填充hit.Fields
+			allDocsReq.Fields = fieldsList
+		}
 		allDocsResult, err := idx.Search(allDocsReq)
 		if err == nil {
-			// 创建docCache（复用已有的逻辑）
+			// 性能优化：如果使用了Fields机制，直接从hit.Fields提取字段值
+			// 这避免了Document()调用的开销，性能提升显著
 			docCache := make(map[string]map[string]interface{})
-			for _, hit := range allDocsResult.Hits {
-				doc, err := idx.Document(hit.ID)
-				if err == nil && doc != nil {
-					docCache[hit.ID] = h.extractDocumentFields(doc)
+			if len(fieldsList) > 0 && len(allDocsResult.Hits) > 0 {
+				// 使用Fields机制：直接从hit.Fields提取字段值
+				for _, hit := range allDocsResult.Hits {
+					if hit.Fields == nil {
+						continue
+					}
+					doc := make(map[string]interface{}, len(fieldsNeeded))
+					for field := range fieldsNeeded {
+						if val, ok := hit.Fields[field]; ok {
+							doc[field] = val
+						}
+					}
+					if len(doc) > 0 {
+						docCache[hit.ID] = doc
+					}
+				}
+			} else {
+				// 回退方案：如果Fields机制不可用，使用IndexReader复用
+				advancedIdx, idxErr := idx.Advanced()
+				if idxErr == nil {
+					reader, readerErr := advancedIdx.Reader()
+					if readerErr == nil {
+						defer reader.Close()
+						// 复用同一个Reader逐个获取文档
+						for _, hit := range allDocsResult.Hits {
+							doc, docErr := reader.Document(hit.ID)
+							if docErr == nil && doc != nil {
+								docCache[hit.ID] = h.extractDocumentFields(doc)
+							}
+						}
+					}
+				}
+				// 如果使用IndexReader失败，回退到原来的方法
+				if len(docCache) == 0 {
+					for _, hit := range allDocsResult.Hits {
+						doc, docErr := idx.Document(hit.ID) // 每次调用都会创建新Reader
+						if docErr == nil && doc != nil {
+							docCache[hit.ID] = h.extractDocumentFields(doc)
+						}
+					}
 				}
 			}
-			metricsAggs, err := h.calculateMetricsAggregationsWithCache(allDocsResult, metricsInfo.Aggregations, docCache)
+
+			metricsAggs, err = h.calculateMetricsAggregationsWithCache(allDocsResult, parsedSubAggs.MetricsInfo.Aggregations, docCache)
 			if err == nil {
 				for k, v := range metricsAggs {
 					result[k] = v

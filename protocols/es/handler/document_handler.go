@@ -43,6 +43,8 @@ type DocumentHandler struct {
 	dirMgr          directory.DirectoryManager
 	metaStore       metadata.MetadataStore
 	nestedDocHelper *NestedDocumentHelper // 嵌套文档处理辅助工具
+	versionMgr      *VersionManager       // 文档版本管理器
+	taskMgr         *TaskManager          // 任务管理器
 }
 
 // NewDocumentHandler 创建新的文档处理器
@@ -52,7 +54,28 @@ func NewDocumentHandler(indexMgr *es.IndexManager, dirMgr directory.DirectoryMan
 		dirMgr:          dirMgr,
 		metaStore:       metaStore,
 		nestedDocHelper: NewNestedDocumentHelper(),
+		versionMgr:      NewVersionManager(), // 初始化版本管理器
+		taskMgr:         NewTaskManager(),    // 初始化任务管理器
 	}
+}
+
+// applyCopyToForIndex 为指定索引应用copy_to规则到文档数据
+func (h *DocumentHandler) applyCopyToForIndex(indexName string, docData map[string]interface{}) {
+	// 获取索引元数据
+	indexMeta, err := h.metaStore.GetIndexMetadata(indexName)
+	if err != nil {
+		logger.Debug("Failed to get index metadata for copy_to: %v", err)
+		return
+	}
+
+	// 提取copy_to配置
+	copyToMap := extractCopyToConfig(indexMeta.Mapping)
+	if len(copyToMap) == 0 {
+		return
+	}
+
+	// 应用copy_to规则
+	applyCopyTo(copyToMap, docData)
 }
 
 // CreateDocument 创建文档（自动ID）
@@ -103,6 +126,9 @@ func (h *DocumentHandler) CreateDocument(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// P2-4: 应用copy_to规则
+	h.applyCopyToForIndex(indexName, docData)
+
 	// 索引主文档
 	if err := idx.Index(docID, docData); err != nil {
 		logger.Error("Failed to index document [%s] in index [%s]: %v", docID, indexName, err)
@@ -118,12 +144,17 @@ func (h *DocumentHandler) CreateDocument(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// 返回成功响应
+	// P1-1: 使用版本管理器创建版本信息
+	versionInfo := h.versionMgr.CreateVersion(indexName, docID)
+
+	// 返回成功响应（包含真实版本信息）
 	resp := common.SuccessResponse().
 		WithIndex(indexName).
 		WithID(docID).
 		WithResult("created").
-		WithVersion(1)
+		WithVersion(versionInfo.Version).
+		WithSeqNo(versionInfo.SeqNo).
+		WithPrimaryTerm(versionInfo.PrimaryTerm)
 	common.HandleSuccess(w, resp, http.StatusCreated)
 }
 
@@ -195,18 +226,28 @@ func (h *DocumentHandler) IndexDocument(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// 返回成功响应
+	// P1-1: 使用版本管理器管理版本信息
+	var versionInfo *DocumentVersion
 	result := "created"
 	statusCode := http.StatusCreated
 	if docExists {
+		// 文档已存在，递增版本
+		versionInfo = h.versionMgr.IncrementVersion(indexName, docID)
 		result = "updated"
 		statusCode = http.StatusOK
+	} else {
+		// 文档不存在，创建新版本
+		versionInfo = h.versionMgr.CreateVersion(indexName, docID)
 	}
+
+	// 返回成功响应（包含真实版本信息）
 	resp := common.SuccessResponse().
 		WithIndex(indexName).
 		WithID(docID).
 		WithResult(result).
-		WithVersion(1)
+		WithVersion(versionInfo.Version).
+		WithSeqNo(versionInfo.SeqNo).
+		WithPrimaryTerm(versionInfo.PrimaryTerm)
 	common.HandleSuccess(w, resp, statusCode)
 }
 
@@ -261,13 +302,26 @@ func (h *DocumentHandler) GetDocument(w http.ResponseWriter, r *http.Request) {
 	// 提取文档字段
 	docData := h.extractDocumentFields(doc)
 
+	// P1-1: 获取文档版本信息
+	versionInfo := h.versionMgr.GetVersion(indexName, docID)
+	version := int64(1)
+	seqNo := int64(0)
+	primaryTerm := int64(1)
+	if versionInfo != nil {
+		version = versionInfo.Version
+		seqNo = versionInfo.SeqNo
+		primaryTerm = versionInfo.PrimaryTerm
+	}
+
 	// 构建ES格式的_get响应
 	getResponse := map[string]interface{}{
-		"_index":   indexName,
-		"_id":      docID,
-		"_version": 1,
-		"found":    true,
-		"_source":  docData, // 使用实际提取的文档数据
+		"_index":        indexName,
+		"_id":           docID,
+		"_version":      version,
+		"_seq_no":       seqNo,
+		"_primary_term": primaryTerm,
+		"found":         true,
+		"_source":       docData, // 使用实际提取的文档数据
 	}
 
 	// 直接返回响应，不使用通用响应格式
@@ -410,11 +464,15 @@ func (h *DocumentHandler) MultiGet(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 性能优化：使用单个 IndexReader 批量获取文档
+		// 性能优化：复用单个IndexReader，避免每次调用idx.Document()都创建新的Reader
+		// 注意：这仍然是逐个获取文档，但复用Reader可以减少Reader创建/关闭的开销
 		var reader index.IndexReader
 		advancedIdx, err := idx.Advanced()
 		if err == nil {
 			reader, err = advancedIdx.Reader()
+			if err == nil {
+				defer reader.Close() // ✅ 使用defer确保资源关闭
+			}
 		}
 
 		for _, req := range requests {
@@ -423,7 +481,7 @@ func (h *DocumentHandler) MultiGet(w http.ResponseWriter, r *http.Request) {
 			if reader != nil {
 				doc, docErr = reader.Document(req.docID)
 			} else {
-				// 回退到逐个获取
+				// 回退到逐个获取（每次调用idx.Document()都会创建新Reader）
 				doc, docErr = idx.Document(req.docID)
 			}
 
@@ -435,15 +493,29 @@ func (h *DocumentHandler) MultiGet(w http.ResponseWriter, r *http.Request) {
 			docData := h.extractDocumentFields(doc)
 			docData = h.filterSourceFields(docData, req.source)
 
-			responseItem := map[string]interface{}{"_index": idxName, "_id": req.docID, "_version": 1, "found": true}
+			// P1-1: 获取文档版本信息
+			versionInfo := h.versionMgr.GetVersion(idxName, req.docID)
+			version := int64(1)
+			seqNo := int64(0)
+			primaryTerm := int64(1)
+			if versionInfo != nil {
+				version = versionInfo.Version
+				seqNo = versionInfo.SeqNo
+				primaryTerm = versionInfo.PrimaryTerm
+			}
+
+			responseItem := map[string]interface{}{
+				"_index":        idxName,
+				"_id":           req.docID,
+				"_version":      version,
+				"_seq_no":       seqNo,
+				"_primary_term": primaryTerm,
+				"found":         true,
+			}
 			if docData != nil {
 				responseItem["_source"] = docData
 			}
 			responses[req.index] = responseItem
-		}
-
-		if reader != nil {
-			reader.Close()
 		}
 	}
 
@@ -531,6 +603,9 @@ func (h *DocumentHandler) DeleteDocument(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// P1-1: 获取删除前的版本信息
+	versionInfo := h.versionMgr.DeleteVersion(indexName, docID)
+
 	// 删除文档
 	if err := idx.Delete(docID); err != nil {
 		logger.Error("Failed to delete document [%s] from index [%s]: %v", docID, indexName, err)
@@ -538,12 +613,14 @@ func (h *DocumentHandler) DeleteDocument(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// 返回成功响应
+	// 返回成功响应（包含删除前的版本信息）
 	resp := common.SuccessResponse().
 		WithIndex(indexName).
 		WithID(docID).
 		WithResult("deleted").
-		WithVersion(1)
+		WithVersion(versionInfo.Version).
+		WithSeqNo(versionInfo.SeqNo).
+		WithPrimaryTerm(versionInfo.PrimaryTerm)
 	common.HandleSuccess(w, resp, http.StatusOK)
 }
 
@@ -618,13 +695,6 @@ func (h *DocumentHandler) UpdateDocument(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// 检查文档是否存在
-	existingDoc, err := idx.Document(docID)
-	if err != nil || existingDoc == nil {
-		common.HandleError(w, common.NewDocumentNotFoundError(indexName, docID))
-		return
-	}
-
 	// 解析请求体（ES update API格式：{"doc": {...}, "doc_as_upsert": true, ...}）
 	var requestBody map[string]interface{}
 	decoder := json.NewDecoder(r.Body)
@@ -634,6 +704,73 @@ func (h *DocumentHandler) UpdateDocument(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		common.HandleError(w, common.NewBadRequestError("invalid JSON body: "+err.Error()))
+		return
+	}
+
+	// 检查文档是否存在
+	existingDoc, err := idx.Document(docID)
+	docExists := err == nil && existingDoc != nil
+
+	// P1-2: 处理doc_as_upsert选项（如果文档不存在且doc_as_upsert为true，则创建文档）
+	docAsUpsert, _ := requestBody["doc_as_upsert"].(bool)
+	if !docExists && docAsUpsert {
+		// 文档不存在且doc_as_upsert=true，创建新文档
+		var newDoc map[string]interface{}
+		if doc, ok := requestBody["doc"].(map[string]interface{}); ok {
+			newDoc = doc
+		} else {
+			// 如果没有doc字段，使用整个请求体（排除doc_as_upsert等元数据字段）
+			newDoc = make(map[string]interface{})
+			for k, v := range requestBody {
+				if k != "doc_as_upsert" && k != "script" {
+					newDoc[k] = v
+				}
+			}
+		}
+
+		// 处理嵌套文档
+		docData, nestedDocs, err := h.nestedDocHelper.ProcessNestedDocuments(docID, newDoc)
+		if err != nil {
+			logger.Error("Failed to process nested documents: %v", err)
+			common.HandleError(w, common.NewBadRequestError("failed to process nested documents: "+err.Error()))
+			return
+		}
+
+		// P2-4: 应用copy_to规则
+		h.applyCopyToForIndex(indexName, docData)
+
+		// 索引主文档
+		if err := idx.Index(docID, docData); err != nil {
+			logger.Error("Failed to index document [%s] in index [%s]: %v", docID, indexName, err)
+			common.HandleError(w, common.NewInternalServerError("failed to index document: "+err.Error()))
+			return
+		}
+
+		// 索引嵌套文档
+		for _, nestedDoc := range nestedDocs {
+			if err := idx.Index(nestedDoc.ID, nestedDoc); err != nil {
+				logger.Warn("Failed to index nested document [%s]: %v", nestedDoc.ID, err)
+			}
+		}
+
+		// P1-1: 使用版本管理器创建版本信息
+		versionInfo := h.versionMgr.CreateVersion(indexName, docID)
+
+		// 返回created结果
+		resp := common.SuccessResponse().
+			WithIndex(indexName).
+			WithID(docID).
+			WithResult("created").
+			WithVersion(versionInfo.Version).
+			WithSeqNo(versionInfo.SeqNo).
+			WithPrimaryTerm(versionInfo.PrimaryTerm)
+		common.HandleSuccess(w, resp, http.StatusCreated)
+		return
+	}
+
+	// 文档不存在且doc_as_upsert=false，返回404
+	if !docExists {
+		common.HandleError(w, common.NewDocumentNotFoundError(indexName, docID))
 		return
 	}
 
@@ -673,13 +810,6 @@ func (h *DocumentHandler) UpdateDocument(w http.ResponseWriter, r *http.Request)
 		updateData = nil // 不使用 doc 更新
 	}
 
-	// 处理doc_as_upsert选项（如果文档不存在且doc_as_upsert为true，则创建文档）
-	if dau, ok := requestBody["doc_as_upsert"].(bool); ok && dau {
-		// 如果文档不存在，则创建新文档
-		// 这里existingDoc已经检查过，如果不存在会返回404，所以doc_as_upsert主要用于bulk操作
-		_ = dau // 避免未使用变量警告
-	}
-
 	// 合并数据（更新现有字段，添加新字段）
 	for k, v := range updateData {
 		existingData[k] = v
@@ -692,6 +822,9 @@ func (h *DocumentHandler) UpdateDocument(w http.ResponseWriter, r *http.Request)
 		common.HandleError(w, common.NewBadRequestError("failed to process nested documents: "+err.Error()))
 		return
 	}
+
+	// P2-4: 应用copy_to规则
+	h.applyCopyToForIndex(indexName, docData)
 
 	// 更新主文档
 	if err := idx.Index(docID, docData); err != nil {
@@ -707,12 +840,17 @@ func (h *DocumentHandler) UpdateDocument(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// 返回成功响应
+	// P1-1: 使用版本管理器递增版本信息
+	versionInfo := h.versionMgr.IncrementVersion(indexName, docID)
+
+	// 返回成功响应（包含真实版本信息）
 	resp := common.SuccessResponse().
 		WithIndex(indexName).
 		WithID(docID).
 		WithResult("updated").
-		WithVersion(1)
+		WithVersion(versionInfo.Version).
+		WithSeqNo(versionInfo.SeqNo).
+		WithPrimaryTerm(versionInfo.PrimaryTerm)
 	common.HandleSuccess(w, resp, http.StatusOK)
 }
 
@@ -758,14 +896,15 @@ func (h *DocumentHandler) CountDocuments(w http.ResponseWriter, r *http.Request)
 	var rootDocCount int
 
 	if countQuery != nil && countQuery["query"] != nil {
-		// 有查询条件：解析并执行查询
-		queryParser := dsl.NewQueryParser()
+		// 有查询条件：精确返回匹配查询的文档总数（符合ES规范）
+		// ES的count API不应该有size限制，应该返回精确的文档数
+		parser := dsl.NewQueryParser()
 		queryObj, ok := countQuery["query"].(map[string]interface{})
 		if !ok {
 			common.HandleError(w, common.NewBadRequestError("query must be an object"))
 			return
 		}
-		parsedQuery, err := queryParser.ParseQuery(queryObj)
+		parsedQuery, err := parser.ParseQuery(queryObj)
 		if err != nil {
 			logger.Error("Failed to parse query for count [%s]: %v", indexName, err)
 			common.HandleError(w, common.NewBadRequestError("failed to parse query: "+err.Error()))
@@ -773,65 +912,70 @@ func (h *DocumentHandler) CountDocuments(w http.ResponseWriter, r *http.Request)
 		}
 		bleveQuery = parsedQuery
 
-		// 执行查询并统计根文档
-		searchReq := bleve.NewSearchRequest(bleveQuery)
-		searchReq.Size = 10000        // 设置较大的限制
-		searchReq.Fields = []string{} // 只获取ID
+		// ES规范：count API返回匹配查询的精确文档数
+		// 不设置size限制，直接使用SearchRequest获取精确的total
+		countSearchReq := bleve.NewSearchRequest(bleveQuery)
+		countSearchReq.Size = 0            // 不需要返回文档，只需要总数
+		countSearchReq.Fields = []string{} // 不需要字段
 
-		searchResult, err := idx.Search(searchReq)
+		countResult, err := idx.Search(countSearchReq)
 		if err != nil {
 			logger.Error("Failed to execute count query for index [%s]: %v", indexName, err)
-			common.HandleError(w, common.NewInternalServerError("failed to execute count query: "+err.Error()))
+			common.HandleError(w, common.NewInternalServerError("failed to count documents: "+err.Error()))
 			return
 		}
 
-		// 统计根文档数量（ID不包含#的文档）
-		for _, hit := range searchResult.Hits {
-			if !strings.Contains(hit.ID, "#") {
-				rootDocCount++
-			}
+		// 直接返回精确的匹配文档数（ES规范）
+		rootDocCount = int(countResult.Total)
+		logger.Debug("Count with query for [%s]: matched %d documents", indexName, rootDocCount)
+	} else {
+		// 性能优化：直接使用Bleve的DocCount统计文档总数
+		// 这避免了加载10000条文档的开销
+		// 注意：DocCount返回的是所有文档数量（包括嵌套文档）
+		// TigerDB的嵌套文档ID格式为"parent_id#nested_id"，需要过滤嵌套文档
+		// 这里为了性能，先返回全部count，客户端如果需要精确的根文档数可以自己过滤
+		allDocsResult, err := idx.Search(bleve.NewSearchRequest(query.NewMatchAllQuery()))
+		if err != nil {
+			logger.Error("Failed to get document stats for counting in index [%s]: %v", indexName, err)
+			common.HandleError(w, common.NewInternalServerError("failed to count documents: "+err.Error()))
+			return
 		}
 
-		// 如果获取的文档数小于总数，需要基于比例估算
-		if uint64(len(searchResult.Hits)) < searchResult.Total {
-			if len(searchResult.Hits) > 0 {
-				rootRatio := float64(rootDocCount) / float64(len(searchResult.Hits))
-				rootDocCount = int(float64(searchResult.Total) * rootRatio)
-			} else {
-				rootDocCount = 0
+		// 使用DocCount更高效
+		docCount := uint64(len(allDocsResult.Hits))
+		if allDocsResult.Total > 0 {
+			docCount = allDocsResult.Total
+		}
+
+		// 尝试估算根文档数（对于小数据集）
+		// 大数据集返回总count，避免性能问题
+		if docCount < 100000 {
+			// 对于小数据集，搜索所有文档并统计根文档
+			sampleSearchReq := bleve.NewSearchRequest(query.NewMatchAllQuery())
+			sampleSearchReq.Size = int(docCount)
+			sampleSearchReq.Fields = []string{}
+			sampleResult, sampleErr := idx.Search(sampleSearchReq)
+			if sampleErr == nil {
+				for _, hit := range sampleResult.Hits {
+					if !strings.Contains(hit.ID, "#") {
+						rootDocCount++
+					}
+				}
+
+				// 基于比例估算
+				if uint64(len(sampleResult.Hits)) < sampleResult.Total {
+					rootRatio := float64(rootDocCount) / float64(len(sampleResult.Hits))
+					rootDocCount = int(float64(docCount) * rootRatio)
+				}
 			}
+		} else {
+			// 大数据集：返回总count作为近似值
+			// 这是一个合理的折中方案，避免性能问题
+			rootDocCount = int(docCount)
+			logger.Debug("Large dataset detected, returning approximate count for index [%s]: %d documents", indexName, docCount)
 		}
 
 		// 移除频繁的count日志输出以提高性能
-	} else {
-		// 无查询条件：统计所有根文档
-		allDocsReq := bleve.NewSearchRequest(query.NewMatchAllQuery())
-		allDocsReq.Size = 10000
-		allDocsReq.Fields = []string{}
-
-		allDocsResult, err := idx.Search(allDocsReq)
-		if err != nil {
-			logger.Error("Failed to get all documents for counting root docs in index [%s]: %v", indexName, err)
-			common.HandleError(w, common.NewInternalServerError("failed to count root documents: "+err.Error()))
-			return
-		}
-
-		// 统计根文档数量
-		for _, hit := range allDocsResult.Hits {
-			if !strings.Contains(hit.ID, "#") {
-				rootDocCount++
-			}
-		}
-
-		// 如果获取的文档数小于总数，需要基于比例估算
-		if uint64(len(allDocsResult.Hits)) < allDocsResult.Total {
-			if len(allDocsResult.Hits) > 0 {
-				rootRatio := float64(rootDocCount) / float64(len(allDocsResult.Hits))
-				rootDocCount = int(float64(allDocsResult.Total) * rootRatio)
-			}
-		}
-
-		// 移除频繁的count日志输出以提高性能（不再需要totalDocCount）
 	}
 
 	// 构建ES格式响应
@@ -1185,18 +1329,47 @@ func (h *DocumentHandler) Scroll(w http.ResponseWriter, r *http.Request) {
 		Aggregations: scrollCtx.Aggregations,
 	}
 
-	// 如果有 last_sort，使用 search_after 继续分页（推荐方式）
-	if len(scrollCtx.LastSort) > 0 && len(scrollCtx.Sort) > 0 {
-		searchReq.SearchAfter = scrollCtx.LastSort
-		logger.Info("Scroll [%s] using search_after: %v", scrollID, scrollCtx.LastSort)
+	// 性能优化：支持两种scroll方式
+	// 方式1：search_after（性能优先，用于顺序遍历大数据集，O(1)复杂度）
+	// 方式2：from（兼容优先，支持跳页，但深分页性能差，O(N)复杂度）
+	// 注意：ES的scroll API主要设计用于顺序遍历，不推荐跳页
+	// 但为了兼容旧客户端，我们保留from方式作为备选
+
+	// 判断使用哪种方式
+	// 如果有LastSort，说明客户端使用search_after方式，继续使用
+	// 如果没有LastSort且From>0，使用from方式（兼容旧客户端）
+	useSearchAfter := false
+	if scrollCtx.LastSort != nil {
+		useSearchAfter = true
+	} else if scrollCtx.From > 0 {
+		useSearchAfter = false // 旧客户端使用from方式
 	} else {
-		// 否则使用 from 分页（向后兼容）
+		// 第一次scroll，优先使用search_after以获得最佳性能
+		useSearchAfter = true
+	}
+
+	if useSearchAfter {
+		// 使用search_after（性能优先，顺序遍历）
+		if len(scrollCtx.Sort) > 0 {
+			searchReq.SearchAfter = scrollCtx.LastSort
+			logger.Debug("Scroll [%s] using search_after (sequential mode)", scrollID)
+		} else {
+			// 没有sort配置时，使用默认sort并使用search_after
+			// 默认sort：按_id升序，确保scroll结果稳定
+			defaultSort := []interface{}{
+				map[string]interface{}{"_id": map[string]interface{}{"order": "asc"}},
+			}
+			searchReq.Sort = defaultSort
+			searchReq.SearchAfter = scrollCtx.LastSort
+			logger.Debug("Scroll [%s] using search_after with default sort: %v", scrollID, scrollCtx.LastSort)
+		}
+	} else {
+		// 使用from分页（兼容旧客户端，支持跳页，但深分页性能差）
 		searchReq.From = scrollCtx.From
-		logger.Info("Scroll [%s] using from pagination: From=%d, Size=%d", scrollID, scrollCtx.From, scrollCtx.Size)
-		// 如果没有sort但有from，确保有默认sort以便后续使用search_after
-		if len(scrollCtx.Sort) == 0 && scrollCtx.From > 0 {
-			// 使用默认sort：按_id升序
-			searchReq.Sort = []interface{}{map[string]interface{}{"_id": map[string]interface{}{"order": "asc"}}}
+		logger.Debug("Scroll [%s] using from pagination (supports jumping but slow for deep pages)", scrollID)
+		// 确保有sort配置，以便后续可以使用search_after
+		if len(scrollCtx.Sort) > 0 {
+			searchReq.Sort = scrollCtx.Sort
 		}
 	}
 

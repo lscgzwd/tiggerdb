@@ -118,11 +118,26 @@ type AggregationConfig struct {
 	SubAggregations map[string]map[string]interface{} // 嵌套聚合（aggs 或 aggregations）
 }
 
-// parseAggregations 解析ES聚合请求并转换为bleve FacetsRequest
-// 返回: (facets请求, metrics聚合信息, composite聚合信息, 嵌套聚合信息, filter聚合信息, top_hits聚合信息, nested字段聚合信息, 错误)
-func (h *DocumentHandler) parseAggregations(aggs map[string]map[string]interface{}) (bleve.FacetsRequest, *MetricsAggregationInfo, *CompositeAggregationInfo, *NestedAggregationInfo, *FilterAggregationInfo, *TopHitsAggregationInfo, *NestedFieldAggregationInfo, error) {
+// ParsedAggregations P2-1: 聚合解析结果结构体（封装所有返回值，提升可维护性）
+// 替代原来的8个返回值，使代码更清晰、易于扩展
+// 新增聚合类型只需在此结构体中添加字段，无需修改函数签名和所有调用点
+type ParsedAggregations struct {
+	Facets             bleve.FacetsRequest            // Bleve facets请求（用于terms、range等）
+	MetricsInfo        *MetricsAggregationInfo        // Metrics聚合信息（avg、sum、min、max等）
+	CompositeInfo      *CompositeAggregationInfo      // Composite聚合信息
+	NestedInfo         *NestedAggregationInfo         // 嵌套聚合信息
+	FilterInfo         *FilterAggregationInfo         // Filter聚合信息
+	TopHitsInfo        *TopHitsAggregationInfo        // TopHits聚合信息
+	NestedFieldInfo    *NestedFieldAggregationInfo    // Nested字段聚合信息
+	ScriptedMetricInfo *ScriptedMetricAggregationInfo // Scripted Metric聚合信息
+	BucketScriptInfo   *BucketScriptAggregationInfo   // Bucket Script聚合信息
+}
+
+// parseAggregations P2-1: 解析ES聚合请求并转换为bleve FacetsRequest
+// 使用ParsedAggregations结构体封装返回值，提升可维护性和扩展性
+func (h *DocumentHandler) parseAggregations(aggs map[string]map[string]interface{}) (*ParsedAggregations, error) {
 	if len(aggs) == 0 {
-		return nil, nil, nil, nil, nil, nil, nil, nil
+		return &ParsedAggregations{}, nil
 	}
 
 	facets := make(bleve.FacetsRequest)
@@ -332,7 +347,35 @@ func (h *DocumentHandler) parseAggregations(aggs map[string]map[string]interface
 		logger.Debug("parseAggregations: found nested field aggregations, count=%d", len(nestedFieldAggs))
 	}
 
-	return facets, metricsInfo, compositeInfo, nestedInfo, filterInfo, topHitsInfo, nestedFieldInfo, nil
+	var scriptedMetricInfo *ScriptedMetricAggregationInfo
+	if len(scriptedMetricAggs) > 0 {
+		scriptedMetricInfo = &ScriptedMetricAggregationInfo{
+			Aggregations: scriptedMetricAggs,
+		}
+		logger.Debug("parseAggregations: found scripted_metric aggregations, count=%d", len(scriptedMetricAggs))
+	}
+
+	var bucketScriptInfo *BucketScriptAggregationInfo
+	if len(bucketScriptAggs) > 0 {
+		bucketScriptInfo = &BucketScriptAggregationInfo{
+			Aggregations: bucketScriptAggs,
+		}
+		logger.Debug("parseAggregations: found bucket_script aggregations, count=%d", len(bucketScriptAggs))
+	}
+
+	// P2-1: 返回封装的结构体，替代原来的8个返回值
+	// 优势：新增聚合类型只需在此结构体中添加字段，无需修改函数签名和所有调用点
+	return &ParsedAggregations{
+		Facets:             facets,
+		MetricsInfo:        metricsInfo,
+		CompositeInfo:      compositeInfo,
+		NestedInfo:         nestedInfo,
+		FilterInfo:         filterInfo,
+		TopHitsInfo:        topHitsInfo,
+		NestedFieldInfo:    nestedFieldInfo,
+		ScriptedMetricInfo: scriptedMetricInfo,
+		BucketScriptInfo:   bucketScriptInfo,
+	}, nil
 }
 
 // parseSingleAggregation 解析单个聚合配置（包括嵌套聚合）

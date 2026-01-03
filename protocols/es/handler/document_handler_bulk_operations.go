@@ -17,8 +17,9 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/lscgzwd/tiggerdb/logger"
 	"net/http"
+
+	"github.com/lscgzwd/tiggerdb/logger"
 
 	"github.com/google/uuid"
 	bleve "github.com/lscgzwd/tiggerdb"
@@ -50,6 +51,9 @@ func (h *DocumentHandler) executeBulkIndexOperation(item BulkRequest, idx bleve.
 	// 暂时禁用嵌套文档处理，直接使用原始文档数据
 	docData := docBody
 	nestedDocs := make([]*document.NestedDocument, 0)
+
+	// P2-4: 应用copy_to规则
+	h.applyCopyToForIndex(item.Index, docData)
 
 	// 准备索引数据，确保_source被存储
 	sourceJSON, _ := json.Marshal(docData)
@@ -85,18 +89,32 @@ func (h *DocumentHandler) executeBulkIndexOperation(item BulkRequest, idx bleve.
 		}
 	}
 
-	// 默认返回 created，因为无法区分是创建还是更新（性能优化）
+	// P1-1: 使用版本管理器管理版本信息
+	// 检查文档是否存在，决定是创建还是更新版本
+	existingDoc, _ := idx.Document(docID)
+	var versionInfo *DocumentVersion
 	opResult := "created"
 	statusCode := http.StatusCreated
+	if existingDoc != nil {
+		// 文档存在，递增版本
+		versionInfo = h.versionMgr.IncrementVersion(item.Index, docID)
+		opResult = "updated"
+		statusCode = http.StatusOK
+	} else {
+		// 文档不存在，创建新版本
+		versionInfo = h.versionMgr.CreateVersion(item.Index, docID)
+		opResult = "created"
+		statusCode = http.StatusCreated
+	}
 
 	return map[string]interface{}{
 		"_index":        item.Index,
 		"_id":           docID,
-		"_version":      1,
+		"_version":      versionInfo.Version,
 		"result":        opResult,
 		"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
-		"_seq_no":       0,
-		"_primary_term": 1,
+		"_seq_no":       versionInfo.SeqNo,
+		"_primary_term": versionInfo.PrimaryTerm,
 		"status":        statusCode,
 	}
 }
@@ -138,6 +156,9 @@ func (h *DocumentHandler) executeBulkUpdateOperation(item BulkRequest, idx bleve
 			}
 		}
 
+		// P2-4: 应用copy_to规则
+		h.applyCopyToForIndex(item.Index, docData)
+
 		// 准备索引数据，确保_source被存储
 		sourceJSON, _ := json.Marshal(docData)
 		indexData := map[string]interface{}{
@@ -163,16 +184,34 @@ func (h *DocumentHandler) executeBulkUpdateOperation(item BulkRequest, idx bleve
 			}
 		}
 
+		// P1-1: 使用版本管理器管理版本信息
+		// 检查文档是否存在，决定是创建还是更新版本
+		existingDoc, _ := idx.Document(item.ID)
+		var versionInfo *DocumentVersion
+		result := "created"
+		statusCode := http.StatusCreated
+		if existingDoc != nil {
+			// 文档存在，递增版本
+			versionInfo = h.versionMgr.IncrementVersion(item.Index, item.ID)
+			result = "updated"
+			statusCode = http.StatusOK
+		} else {
+			// 文档不存在，创建新版本
+			versionInfo = h.versionMgr.CreateVersion(item.Index, item.ID)
+			result = "created"
+			statusCode = http.StatusCreated
+		}
+
 		// 返回创建成功响应
 		return map[string]interface{}{
 			"_index":        item.Index,
 			"_id":           item.ID,
-			"_version":      1,
-			"result":        "created",
+			"_version":      versionInfo.Version,
+			"result":        result,
 			"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
-			"_seq_no":       0,
-			"_primary_term": 1,
-			"status":        http.StatusCreated,
+			"_seq_no":       versionInfo.SeqNo,
+			"_primary_term": versionInfo.PrimaryTerm,
+			"status":        statusCode,
 		}
 	}
 
@@ -216,14 +255,29 @@ func (h *DocumentHandler) executeBulkUpdateOperation(item BulkRequest, idx bleve
 		}
 	}
 
+	// P1-1: 使用版本管理器管理版本信息
+	// 检查文档是否存在，决定是创建还是更新版本
+	existingDoc, _ := idx.Document(item.ID)
+	var versionInfo *DocumentVersion
+	result := "updated"
+	if existingDoc == nil {
+		// 文档不存在，创建新版本
+		versionInfo = h.versionMgr.CreateVersion(item.Index, item.ID)
+		result = "created"
+	} else {
+		// 文档存在，递增版本
+		versionInfo = h.versionMgr.IncrementVersion(item.Index, item.ID)
+		result = "updated"
+	}
+
 	return map[string]interface{}{
 		"_index":        item.Index,
 		"_id":           item.ID,
-		"_version":      1,
-		"result":        "updated",
+		"_version":      versionInfo.Version,
+		"result":        result,
 		"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
-		"_seq_no":       0,
-		"_primary_term": 1,
+		"_seq_no":       versionInfo.SeqNo,
+		"_primary_term": versionInfo.PrimaryTerm,
 		"status":        http.StatusOK,
 	}
 }
@@ -242,6 +296,9 @@ func (h *DocumentHandler) executeBulkDeleteOperation(item BulkRequest, idx bleve
 		}
 	}
 
+	// P1-1: 获取删除前的版本信息
+	versionInfo := h.versionMgr.DeleteVersion(item.Index, item.ID)
+
 	// 性能优化：不检查文档是否存在，直接删除
 	// Bleve 的 Delete 方法对于不存在的文档不会报错，只是没有效果
 	// 这样可以避免文档存在性检查的性能开销
@@ -258,15 +315,30 @@ func (h *DocumentHandler) executeBulkDeleteOperation(item BulkRequest, idx bleve
 		}
 	}
 
-	// 默认返回 deleted，因为无法区分文档是否存在（性能优化）
+	// 根据版本信息判断文档是否存在
+	if versionInfo == nil {
+		// 文档不存在，返回not_found
+		return map[string]interface{}{
+			"_index":        item.Index,
+			"_id":           item.ID,
+			"_version":      0,
+			"result":        "not_found",
+			"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
+			"_seq_no":       0,
+			"_primary_term": 1,
+			"status":        http.StatusOK,
+		}
+	}
+
+	// 文档存在，返回deleted
 	return map[string]interface{}{
 		"_index":        item.Index,
 		"_id":           item.ID,
-		"_version":      1,
+		"_version":      versionInfo.Version,
 		"result":        "deleted",
 		"_shards":       map[string]interface{}{"total": 1, "successful": 1, "failed": 0},
-		"_seq_no":       0,
-		"_primary_term": 1,
+		"_seq_no":       versionInfo.SeqNo,
+		"_primary_term": versionInfo.PrimaryTerm,
 		"status":        http.StatusOK,
 	}
 }

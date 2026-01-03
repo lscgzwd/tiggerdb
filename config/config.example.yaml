@@ -17,6 +17,27 @@ es:
     max_header_bytes: 1048576
     max_request_size: 524288000 # 500 MB
 
+  # 认证配置（可选）
+  auth:
+    # 是否启用认证
+    enabled: false
+
+    # 认证类型: "basic", "bearer", "apikey"
+    type: "basic"
+
+    # Basic Auth 配置（当 type="basic" 时使用）
+    username: "admin"
+    password: "tigerdb2024"
+
+    # API Key 配置（当 type="bearer" 或 type="apikey" 时使用）
+    # apikeys:
+    #   "token1": true
+    #   "token2": true
+    #   "key1": true
+
+    # 认证域（用于 Basic Auth 的 WWW-Authenticate 响应头）
+    realm: "TigerDB"
+
 # ==================== Redis 协议配置（预留）====================
 redis:
   enabled: false

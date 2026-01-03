@@ -135,6 +135,7 @@ func (sm *ScrollManager) GetScrollContext(scrollID string) (*ScrollContext, erro
 }
 
 // UpdateScrollContext 更新 scroll context（用于记录最后一个结果的 sort 值）
+// lastSort: 最后一个结果的sort值，如果为nil表示使用from分页方式
 func (sm *ScrollManager) UpdateScrollContext(scrollID string, lastSort []interface{}) error {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
@@ -150,7 +151,12 @@ func (sm *ScrollManager) UpdateScrollContext(scrollID string, lastSort []interfa
 	}
 
 	ctx.LastSort = lastSort
-	ctx.From += ctx.Size // 更新 from 位置
+	// 只有在使用from分页方式时才更新From（lastSort为nil表示使用from分页）
+	// 如果使用search_after（lastSort不为nil），From不应该被更新，因为search_after不依赖From
+	if lastSort == nil {
+		ctx.From += ctx.Size // 使用from分页时，更新from位置
+	}
+	// 如果lastSort不为nil，说明使用search_after，From保持不变
 	return nil
 }
 

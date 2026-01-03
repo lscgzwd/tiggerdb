@@ -27,8 +27,10 @@ import (
 	"github.com/lscgzwd/tiggerdb/metadata"
 	"github.com/lscgzwd/tiggerdb/protocols"
 	"github.com/lscgzwd/tiggerdb/protocols/es/handler"
+	"github.com/lscgzwd/tiggerdb/protocols/es/http/common"
 	"github.com/lscgzwd/tiggerdb/protocols/es/http/server"
 	esIndex "github.com/lscgzwd/tiggerdb/protocols/es/index"
+	"github.com/lscgzwd/tiggerdb/protocols/es/middleware"
 )
 
 // ESServer Elasticsearch协议服务器
@@ -78,6 +80,19 @@ func NewServer(dirMgr directory.DirectoryManager, metaStore metadata.MetadataSto
 	// 创建统计信息处理器
 	statsHandler := handler.NewStatsHandler(indexMgr, dirMgr, metaStore)
 
+	// 创建认证中间件（处理 config.Auth 为 nil 的情况）
+	var authMiddleware func(http.Handler) http.Handler
+	if config.Auth != nil {
+		authMiddleware = middleware.AuthMiddleware(config.Auth)
+	} else {
+		// 如果未配置认证，使用空中间件（直接放行）
+		authMiddleware = func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r)
+			})
+		}
+	}
+
 	esSrv := &ESServer{
 		config:          config,
 		httpServer:      httpSrv,
@@ -91,8 +106,13 @@ func NewServer(dirMgr directory.DirectoryManager, metaStore metadata.MetadataSto
 		started:         false,
 	}
 
-	// 注册ES路由
-	esSrv.registerRoutes()
+	// P2-6: 设置开发模式（根据日志级别判断）
+	if config.ServerConfig != nil && config.ServerConfig.LogLevel == "debug" {
+		common.SetDevMode(true)
+	}
+
+	// 注册ES路由（传入认证中间件）
+	esSrv.registerRoutes(authMiddleware)
 
 	// 预加载所有索引（启动后台合并任务）
 	go indexMgr.PreloadAllIndices()
@@ -101,17 +121,17 @@ func NewServer(dirMgr directory.DirectoryManager, metaStore metadata.MetadataSto
 }
 
 // registerRoutes 注册ES相关路由
-func (s *ESServer) registerRoutes() {
+func (s *ESServer) registerRoutes(authMiddleware func(http.Handler) http.Handler) {
 	router := s.httpServer.GetRouter()
 
-	// 注册索引相关路由
-	s.registerIndexRoutes(router, s.indexHandler)
+	// 注册索引相关路由（带认证保护）
+	s.registerIndexRoutes(router, s.indexHandler, authMiddleware)
 
-	// 注册文档相关路由
-	s.registerDocumentRoutes(router, s.documentHandler)
+	// 注册文档相关路由（带认证保护）
+	s.registerDocumentRoutes(router, s.documentHandler, authMiddleware)
 
-	// 注册统计信息路由
-	s.registerStatsRoutes(router, s.statsHandler)
+	// 注册统计信息路由（带认证保护）
+	s.registerStatsRoutes(router, s.statsHandler, authMiddleware)
 
 	// 根路径处理函数（支持 GET 和 HEAD）
 	rootHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +195,7 @@ func (s *ESServer) registerRoutes() {
 }
 
 // registerIndexRoutes 注册ES索引相关路由
-func (s *ESServer) registerIndexRoutes(router *server.Router, indexHandler *handler.IndexHandler) {
+func (s *ESServer) registerIndexRoutes(router *server.Router, indexHandler *handler.IndexHandler, authMiddleware func(http.Handler) http.Handler) {
 	routes := []server.Route{
 		{Method: http.MethodPut, Path: "/{index:[^_][^/]*}", Handler: (*indexHandler).CreateIndex},
 		{Method: http.MethodGet, Path: "/{index:[^_][^/]*}", Handler: (*indexHandler).GetIndex},
@@ -195,11 +215,13 @@ func (s *ESServer) registerIndexRoutes(router *server.Router, indexHandler *hand
 		{Method: http.MethodPost, Path: "/{index:[^_][^/]*}/_flush", Handler: (*indexHandler).FlushIndex},
 		{Method: http.MethodPost, Path: "/{index:[^_][^/]*}/_forcemerge", Handler: (*indexHandler).ForceMerge},
 	}
+	// 应用认证中间件保护
+	routes = s.applyAuthMiddleware(routes, authMiddleware)
 	router.AddRoutes(routes)
 }
 
 // registerDocumentRoutes 注册ES文档相关路由
-func (s *ESServer) registerDocumentRoutes(router *server.Router, documentHandler *handler.DocumentHandler) {
+func (s *ESServer) registerDocumentRoutes(router *server.Router, documentHandler *handler.DocumentHandler, authMiddleware func(http.Handler) http.Handler) {
 	routes := []server.Route{
 		{Method: http.MethodPost, Path: "/_bulk", Handler: (*documentHandler).Bulk},
 		{Method: http.MethodPost, Path: "/_msearch", Handler: (*documentHandler).MultiSearch},
@@ -225,17 +247,24 @@ func (s *ESServer) registerDocumentRoutes(router *server.Router, documentHandler
 		{Method: http.MethodDelete, Path: "/_search/scroll", Handler: (*documentHandler).ClearScroll},
 		{Method: http.MethodGet, Path: "/{index:[^_][^/]*}/_mget", Handler: (*documentHandler).MultiGet},
 		{Method: http.MethodPost, Path: "/{index:[^_][^/]*}/_mget", Handler: (*documentHandler).MultiGet},
+		// Tasks API (P1-3: DeleteByQuery异步任务管理)
+		{Method: http.MethodGet, Path: "/_tasks/{task_id}", Handler: (*documentHandler).GetTask},
+		{Method: http.MethodPost, Path: "/_tasks/{task_id}/_cancel", Handler: (*documentHandler).CancelTask},
 	}
+	// 应用认证中间件保护
+	routes = s.applyAuthMiddleware(routes, authMiddleware)
 	router.AddRoutes(routes)
 }
 
 // registerStatsRoutes 注册ES统计信息相关路由
-func (s *ESServer) registerStatsRoutes(router *server.Router, statsHandler *handler.StatsHandler) {
+func (s *ESServer) registerStatsRoutes(router *server.Router, statsHandler *handler.StatsHandler, authMiddleware func(http.Handler) http.Handler) {
 	routes := []server.Route{
 		{Method: http.MethodGet, Path: "/_stats", Handler: (*statsHandler).GetStats},
 		{Method: http.MethodGet, Path: "/_info", Handler: (*statsHandler).GetInfo},
 		{Method: http.MethodGet, Path: "/{index:[^_][^/]*}/_stats", Handler: (*statsHandler).GetIndexStats},
 	}
+	// 应用认证中间件保护
+	routes = s.applyAuthMiddleware(routes, authMiddleware)
 	router.AddRoutes(routes)
 }
 
@@ -298,6 +327,42 @@ func (s *ESServer) IsRunning() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.started && s.httpServer.IsRunning()
+}
+
+// applyAuthMiddleware 应用认证中间件到路由（跳过公开路由）
+func (s *ESServer) applyAuthMiddleware(routes []server.Route, authMiddleware func(http.Handler) http.Handler) []server.Route {
+	if authMiddleware == nil {
+		return routes
+	}
+
+	// 不需要认证的公开路径
+	publicPaths := map[string]bool{
+		"/":                true,
+		"/_ping":           true,
+		"/_cluster/health": true,
+		"/_search":         true,
+	}
+
+	protectedRoutes := make([]server.Route, 0, len(routes))
+	for _, route := range routes {
+		// 路过公开路径
+		if isPublic, ok := publicPaths[route.Path]; ok && isPublic {
+			protectedRoutes = append(protectedRoutes, route)
+		} else {
+			// 应用认证中间件
+			// 将 http.Handler 转换为 http.HandlerFunc
+			wrappedHandler := authMiddleware(route.Handler)
+			protectedRoutes = append(protectedRoutes, server.Route{
+				Method: route.Method,
+				Path:   route.Path,
+				Handler: func(w http.ResponseWriter, r *http.Request) {
+					wrappedHandler.ServeHTTP(w, r)
+				},
+			})
+		}
+	}
+
+	return protectedRoutes
 }
 
 // 确保ESServer实现了ProtocolServer接口

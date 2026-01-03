@@ -72,13 +72,17 @@ type TotalInfo struct {
 	Relation string `json:"relation"`
 }
 
-// ErrorInfo 错误信息
+// ErrorInfo 错误信息（P2-6: 增强错误响应）
 type ErrorInfo struct {
-	Type      string `json:"type"`
-	Reason    string `json:"reason"`
-	Index     string `json:"index,omitempty"`
-	IndexUUID string `json:"index_uuid,omitempty"`
-	Shard     string `json:"shard,omitempty"`
+	Type      string                 `json:"type"`                 // 错误类型
+	Reason    string                 `json:"reason"`               // 错误原因
+	Code      string                 `json:"code,omitempty"`       // 错误码（P2-6新增）
+	Index     string                 `json:"index,omitempty"`      // 索引名
+	IndexUUID string                 `json:"index_uuid,omitempty"` // 索引UUID
+	Shard     string                 `json:"shard,omitempty"`      // 分片信息
+	Context   map[string]interface{} `json:"context,omitempty"`    // 错误上下文（P2-6新增）
+	Stack     []string               `json:"stack,omitempty"`      // 错误堆栈（开发模式，P2-6新增）
+	RootCause []*ErrorInfo           `json:"root_cause,omitempty"` // 根因错误（P2-6新增）
 }
 
 // NewResponse 创建新的响应
@@ -136,6 +140,18 @@ func (r *Response) WithResult(result string) *Response {
 	return r
 }
 
+// WithSeqNo 设置序列号
+func (r *Response) WithSeqNo(seqNo int64) *Response {
+	r.SeqNo = seqNo
+	return r
+}
+
+// WithPrimaryTerm 设置主分片任期
+func (r *Response) WithPrimaryTerm(primaryTerm int64) *Response {
+	r.PrimaryTerm = primaryTerm
+	return r
+}
+
 // WithAcknowledged 设置确认状态
 func (r *Response) WithAcknowledged(acknowledged bool) *Response {
 	r.Acknowledged = acknowledged
@@ -155,12 +171,39 @@ func (r *Response) WithHits(total int64, maxScore float64, hits []interface{}) *
 	return r
 }
 
-// WithError 设置错误信息
+// WithError 设置错误信息（P2-6: 增强错误响应）
 func (r *Response) WithError(errType, reason string) *Response {
 	r.Error = &ErrorInfo{
 		Type:   errType,
 		Reason: reason,
 	}
+	return r
+}
+
+// WithErrorInfo 设置完整的错误信息（P2-6: 增强错误响应）
+func (r *Response) WithErrorInfo(errInfo *ErrorInfo) *Response {
+	r.Error = errInfo
+	return r
+}
+
+// WithErrorCode 设置错误码（P2-6新增）
+func (r *Response) WithErrorCode(code string) *Response {
+	if r.Error == nil {
+		r.Error = &ErrorInfo{}
+	}
+	r.Error.Code = code
+	return r
+}
+
+// WithErrorContext 设置错误上下文（P2-6新增）
+func (r *Response) WithErrorContext(key string, value interface{}) *Response {
+	if r.Error == nil {
+		r.Error = &ErrorInfo{}
+	}
+	if r.Error.Context == nil {
+		r.Error.Context = make(map[string]interface{})
+	}
+	r.Error.Context[key] = value
 	return r
 }
 

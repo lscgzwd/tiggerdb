@@ -184,6 +184,14 @@ func (h *DocumentHandler) Search(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// ES规范：scroll API不支持from参数，scroll是顺序遍历的，不支持跳页
+		// 因此，在创建scroll时，必须忽略from参数，始终从0开始
+		// 如果客户端指定了from，我们忽略它并记录警告
+		if searchReq.From > 0 {
+			logger.Warn("Scroll API does not support 'from' parameter, ignoring from=%d and starting from 0 (ES specification)", searchReq.From)
+			searchReq.From = 0 // 强制从0开始
+		}
+
 		// 如果scroll没有指定sort，使用默认sort（按_id升序），确保scroll可以正常工作
 		scrollSort := searchReq.Sort
 		if len(scrollSort) == 0 {
@@ -212,20 +220,24 @@ func (h *DocumentHandler) Search(w http.ResponseWriter, r *http.Request) {
 		searchResponse["_scroll_id"] = scrollCtx.ScrollID
 
 		// 如果有结果，记录最后一个结果的 sort 值（用于下一次 scroll）
+		// 注意：ES的scroll API不支持from参数，scroll是顺序遍历的，不支持跳页
+		// 因此，在创建scroll时，from参数应该被忽略，始终从0开始
+		// 但为了兼容旧客户端，我们保留from方式作为备选（当没有sort值时）
 		if hitsWrapper, ok := searchResponse["hits"].(map[string]interface{}); ok {
 			// hits["hits"] 的类型是 []map[string]interface{}，不是 []interface{}
 			if hitsList, ok := hitsWrapper["hits"].([]map[string]interface{}); ok && len(hitsList) > 0 {
-				// 更新 scroll context 的 From（用于 from 分页方式）
-				scrollCtx.From = searchReq.From + len(hitsList)
-				logger.Info("Scroll context [%s] updated: From=%d (was %d, hits=%d)", scrollCtx.ScrollID, scrollCtx.From, searchReq.From, len(hitsList))
-
-				// 转换最后一个 hit
+				// 转换最后一个 hit，获取sort值
 				lastHit := hitsList[len(hitsList)-1]
 				if sortVals, ok := lastHit["sort"].([]interface{}); ok && len(sortVals) > 0 {
+					// 有sort值，使用search_after方式（性能优先）
 					scrollCtx.LastSort = sortVals
-					logger.Info("Scroll context [%s] LastSort set to: %v", scrollCtx.ScrollID, sortVals)
+					// 使用search_after时，From保持为0（不更新）
+					logger.Info("Scroll context [%s] LastSort set to: %v (using search_after)", scrollCtx.ScrollID, sortVals)
 				} else {
-					logger.Warn("Scroll context [%s] no sort values in last hit, will use From pagination", scrollCtx.ScrollID)
+					// 没有sort值，使用from分页方式（兼容旧客户端）
+					// 注意：ES规范中scroll不支持from，但为了兼容性保留此方式
+					scrollCtx.From = len(hitsList) // 第一次scroll后，From更新为已返回的文档数
+					logger.Info("Scroll context [%s] updated: From=%d (using from pagination, hits=%d)", scrollCtx.ScrollID, scrollCtx.From, len(hitsList))
 				}
 			} else {
 				logger.Info("Scroll context [%s] no hits returned (hitsList type: %T)", scrollCtx.ScrollID, hitsWrapper["hits"])
@@ -369,12 +381,6 @@ func (h *DocumentHandler) executeSearchInternal(idx bleve.Index, indexName strin
 		}
 	}
 
-	// 解析最小分数（bleve不支持MinScore，使用filter实现）
-	// TODO: 实现min_score过滤
-	if searchReq.MinScore != nil {
-		logger.Warn("min_score is not fully supported, filtering will be done post-search")
-	}
-
 	// 解析聚合
 	var metricsAggInfo *MetricsAggregationInfo
 	var compositeAggInfo *CompositeAggregationInfo
@@ -383,19 +389,20 @@ func (h *DocumentHandler) executeSearchInternal(idx bleve.Index, indexName strin
 	var topHitsAggInfo *TopHitsAggregationInfo
 	var nestedFieldAggInfo *NestedFieldAggregationInfo
 	if searchReq.Aggregations != nil {
-		facets, metricsInfo, compositeInfo, nestedInfo, filterInfo, topHitsInfo, nestedFieldInfo, err := h.parseAggregations(searchReq.Aggregations)
+		// P2-1: 使用结构体封装返回值
+		parsedAggs, err := h.parseAggregations(searchReq.Aggregations)
 		if err != nil {
 			logger.Warn("Failed to parse aggregations: %v", err)
-		} else {
-			if len(facets) > 0 {
-				bleveReq.Facets = facets
+		} else if parsedAggs != nil {
+			if len(parsedAggs.Facets) > 0 {
+				bleveReq.Facets = parsedAggs.Facets
 			}
-			metricsAggInfo = metricsInfo
-			compositeAggInfo = compositeInfo
-			nestedAggInfo = nestedInfo
-			filterAggInfo = filterInfo
-			topHitsAggInfo = topHitsInfo
-			nestedFieldAggInfo = nestedFieldInfo
+			metricsAggInfo = parsedAggs.MetricsInfo
+			compositeAggInfo = parsedAggs.CompositeInfo
+			nestedAggInfo = parsedAggs.NestedInfo
+			filterAggInfo = parsedAggs.FilterInfo
+			topHitsAggInfo = parsedAggs.TopHitsInfo
+			nestedFieldAggInfo = parsedAggs.NestedFieldInfo
 		}
 	}
 
@@ -407,6 +414,20 @@ func (h *DocumentHandler) executeSearchInternal(idx bleve.Index, indexName strin
 		return nil, common.NewInternalServerError("failed to search: " + err.Error())
 	}
 	took := time.Since(startTime).Milliseconds()
+
+	// ES的min_score功能：在搜索后过滤低于分数的文档
+	if searchReq.MinScore != nil {
+		// 实际过滤：移除所有低于min_score的文档
+		filteredHits := search.DocumentMatchCollection{}
+		originalCount := len(searchResult.Hits)
+		for _, hit := range searchResult.Hits {
+			if hit.Score >= *searchReq.MinScore {
+				filteredHits = append(filteredHits, hit)
+			}
+		}
+		searchResult.Hits = filteredHits
+		logger.Debug("Min score filtering applied: kept %d of %d hits (min_score=%v)", len(filteredHits), originalCount, *searchReq.MinScore)
+	}
 	// 打印搜索结果摘要（使用 Info 级别方便调试）
 	logger.Info("executeSearchInternal [%s] - Search result: Total=%d, Hits=%d, MaxScore=%f, Took=%dms",
 		indexName, searchResult.Total, len(searchResult.Hits), searchResult.MaxScore, took)
@@ -421,18 +442,21 @@ func (h *DocumentHandler) executeSearchInternal(idx bleve.Index, indexName strin
 	// 构建ES格式的响应
 	hits := make([]map[string]interface{}, 0, len(searchResult.Hits))
 
-	// 性能优化：使用单个 IndexReader 批量获取文档，避免为每个文档创建新的 Reader
+	// 性能优化：复用单个IndexReader，避免每次调用idx.Document()都创建新的Reader
+	// 注意：这仍然是逐个获取文档（Bleve没有真正的批量获取API），但优势在于：
+	// 1. idx.Document()每次都会创建新的Reader并关闭（有锁、内存分配等开销）
+	// 2. 复用Reader可以减少这些开销，特别是在获取大量文档时
 	var docCache map[string]map[string]interface{}
 	if len(searchResult.Hits) > 0 {
 		docCache = make(map[string]map[string]interface{}, len(searchResult.Hits))
 
-		// 获取底层索引并创建单个 Reader
+		// 获取底层索引并创建单个Reader（只创建一次）
 		advancedIdx, err := idx.Advanced()
 		if err == nil {
 			reader, err := advancedIdx.Reader()
 			if err == nil {
 				defer reader.Close()
-				// 使用单个 Reader 顺序获取所有文档
+				// 复用同一个Reader逐个获取文档（减少Reader创建/关闭开销）
 				for _, hit := range searchResult.Hits {
 					doc, err := reader.Document(hit.ID)
 					if err == nil && doc != nil {
@@ -442,10 +466,10 @@ func (h *DocumentHandler) executeSearchInternal(idx bleve.Index, indexName strin
 			}
 		}
 
-		// 如果上面的方法失败，回退到原来的方法
+		// 如果上面的方法失败，回退到原来的方法（每次调用idx.Document()都会创建新Reader）
 		if len(docCache) == 0 {
 			for _, hit := range searchResult.Hits {
-				doc, err := idx.Document(hit.ID)
+				doc, err := idx.Document(hit.ID) // 每次调用都会创建新Reader
 				if err == nil && doc != nil {
 					docCache[hit.ID] = h.extractDocumentFields(doc)
 				}
@@ -460,8 +484,16 @@ func (h *DocumentHandler) executeSearchInternal(idx bleve.Index, indexName strin
 			"_score": hit.Score,
 		}
 
+		// 获取文档数据（用于 _source 和 script_fields）
+		var doc map[string]interface{}
+		var docExists bool
+		if d, ok := docCache[hit.ID]; ok {
+			docExists = true
+			doc = d
+		}
+
 		// 添加_source字段
-		if doc, ok := docCache[hit.ID]; ok {
+		if docExists {
 			// 根据用户请求的字段进行过滤
 			if len(requestedFields) > 0 {
 				filteredSource := make(map[string]interface{})
@@ -494,7 +526,7 @@ func (h *DocumentHandler) executeSearchInternal(idx bleve.Index, indexName strin
 		}
 
 		// 处理 script_fields
-		if len(searchReq.ScriptFields) > 0 {
+		if len(searchReq.ScriptFields) > 0 && docExists {
 			scriptFieldsResult := h.computeScriptFields(searchReq.ScriptFields, doc, hit.Score)
 			if len(scriptFieldsResult) > 0 {
 				hitData["fields"] = scriptFieldsResult
@@ -969,16 +1001,16 @@ func (h *DocumentHandler) buildFilterAggregations(filterInfo *FilterAggregationI
 		if len(filterAgg.SubAggregations) > 0 {
 			logger.Debug("buildFilterAggregations: processing sub-aggregations for [%s], count=%d", aggName, len(filterAgg.SubAggregations))
 
-			// 解析子聚合
-			facets, metricsInfo, compositeInfo, nestedInfo, _, topHitsInfo, nestedFieldInfo, err := h.parseAggregations(filterAgg.SubAggregations)
+			// P2-1: 使用结构体封装返回值
+			parsedSubAggs, err := h.parseAggregations(filterAgg.SubAggregations)
 			if err != nil {
 				logger.Warn("Failed to parse sub-aggregations for filter [%s]: %v", aggName, err)
-			} else {
+			} else if parsedSubAggs != nil {
 				// 创建搜索请求执行子聚合
 				subSearchReq := bleve.NewSearchRequest(combinedQuery)
 				subSearchReq.Size = 0
-				if len(facets) > 0 {
-					subSearchReq.Facets = facets
+				if len(parsedSubAggs.Facets) > 0 {
+					subSearchReq.Facets = parsedSubAggs.Facets
 				}
 
 				subSearchResult, err := idx.Search(subSearchReq)
@@ -990,15 +1022,15 @@ func (h *DocumentHandler) buildFilterAggregations(filterInfo *FilterAggregationI
 
 					// 处理bucket聚合（terms, range, date_range）
 					if len(subSearchResult.Facets) > 0 {
-						facetAggs := h.buildAggregations(subSearchResult.Facets, compositeInfo, nestedInfo, topHitsInfo, nestedFieldInfo, idx, combinedQuery)
+						facetAggs := h.buildAggregations(subSearchResult.Facets, parsedSubAggs.CompositeInfo, parsedSubAggs.NestedInfo, parsedSubAggs.TopHitsInfo, parsedSubAggs.NestedFieldInfo, idx, combinedQuery)
 						for k, v := range facetAggs {
 							subAggs[k] = v
 						}
 					}
 
 					// 处理top_hits聚合
-					if topHitsInfo != nil && len(topHitsInfo.Aggregations) > 0 {
-						for topHitsName, topHitsConfig := range topHitsInfo.Aggregations {
+					if parsedSubAggs.TopHitsInfo != nil && len(parsedSubAggs.TopHitsInfo.Aggregations) > 0 {
+						for topHitsName, topHitsConfig := range parsedSubAggs.TopHitsInfo.Aggregations {
 							topHitsResult := h.buildTopHitsAggregation(topHitsConfig, idx, combinedQuery)
 							if topHitsResult != nil {
 								subAggs[topHitsName] = topHitsResult
@@ -1007,30 +1039,54 @@ func (h *DocumentHandler) buildFilterAggregations(filterInfo *FilterAggregationI
 					}
 
 					// 处理nested字段聚合
-					if nestedFieldInfo != nil && len(nestedFieldInfo.Aggregations) > 0 {
-						for nestedFieldName, nestedFieldConfig := range nestedFieldInfo.Aggregations {
+					if parsedSubAggs.NestedFieldInfo != nil && len(parsedSubAggs.NestedFieldInfo.Aggregations) > 0 {
+						for nestedFieldName, nestedFieldConfig := range parsedSubAggs.NestedFieldInfo.Aggregations {
 							logger.Debug("buildFilterAggregations: processing nested field aggregation [%s], path=[%s]", nestedFieldName, nestedFieldConfig.Path)
-							// TODO: 实现nested字段聚合逻辑
-							logger.Warn("Nested field aggregation [%s] is not fully implemented yet", nestedFieldName)
+							// 调用buildNestedFieldAggregations函数处理nested字段聚合
+							nestedFieldAggs := h.buildNestedFieldAggregations(&NestedFieldAggregationInfo{
+								Aggregations: map[string]*NestedFieldAggregationConfig{
+									nestedFieldName: nestedFieldConfig,
+								},
+							}, idx, combinedQuery)
+							for k, v := range nestedFieldAggs {
+								result[k] = v
+							}
 						}
 					}
 
 					// 处理metrics聚合
-					if metricsInfo != nil && len(metricsInfo.Aggregations) > 0 {
+					if parsedSubAggs.MetricsInfo != nil && len(parsedSubAggs.MetricsInfo.Aggregations) > 0 {
 						// 获取所有匹配的文档来计算metrics
 						allDocsReq := bleve.NewSearchRequest(combinedQuery)
 						allDocsReq.Size = 10000 // 限制大小，避免内存问题
 						allDocsResult, err := idx.Search(allDocsReq)
 						if err == nil {
-							// 创建docCache
+							// 性能优化：复用单个IndexReader，避免每次调用idx.Document()都创建新的Reader
 							docCache := make(map[string]map[string]interface{})
-							for _, hit := range allDocsResult.Hits {
-								doc, err := idx.Document(hit.ID)
-								if err == nil && doc != nil {
-									docCache[hit.ID] = h.extractDocumentFields(doc)
+							advancedIdx, idxErr := idx.Advanced()
+							if idxErr == nil {
+								reader, readerErr := advancedIdx.Reader()
+								if readerErr == nil {
+									defer reader.Close()
+									// 复用同一个Reader逐个获取文档（减少Reader创建/关闭开销）
+									for _, hit := range allDocsResult.Hits {
+										doc, docErr := reader.Document(hit.ID)
+										if docErr == nil && doc != nil {
+											docCache[hit.ID] = h.extractDocumentFields(doc)
+										}
+									}
 								}
 							}
-							metricsAggs, err := h.calculateMetricsAggregationsWithCache(allDocsResult, metricsInfo.Aggregations, docCache)
+							// 如果使用IndexReader失败，回退到原来的方法（每次调用idx.Document()都会创建新Reader）
+							if len(docCache) == 0 {
+								for _, hit := range allDocsResult.Hits {
+									doc, err := idx.Document(hit.ID) // 每次调用都会创建新Reader
+									if err == nil && doc != nil {
+										docCache[hit.ID] = h.extractDocumentFields(doc)
+									}
+								}
+							}
+							metricsAggs, err := h.calculateMetricsAggregationsWithCache(allDocsResult, parsedSubAggs.MetricsInfo.Aggregations, docCache)
 							if err == nil {
 								for k, v := range metricsAggs {
 									subAggs[k] = v
@@ -1040,10 +1096,10 @@ func (h *DocumentHandler) buildFilterAggregations(filterInfo *FilterAggregationI
 					}
 
 					// 处理composite聚合
-					if compositeInfo != nil && len(compositeInfo.Aggregations) > 0 {
+					if parsedSubAggs.CompositeInfo != nil && len(parsedSubAggs.CompositeInfo.Aggregations) > 0 {
 						// 检查是否有多字段 composite 聚合
 						hasMultiSourceComposite := false
-						for _, cfg := range compositeInfo.Aggregations {
+						for _, cfg := range parsedSubAggs.CompositeInfo.Aggregations {
 							if len(cfg.Sources) > 1 {
 								hasMultiSourceComposite = true
 								break
@@ -1051,15 +1107,15 @@ func (h *DocumentHandler) buildFilterAggregations(filterInfo *FilterAggregationI
 						}
 
 						if hasMultiSourceComposite {
-							allDocs, err := h.fetchAllDocsForCompositeAgg(idx, combinedQuery, compositeInfo)
+							allDocs, err := h.fetchAllDocsForCompositeAgg(idx, combinedQuery, parsedSubAggs.CompositeInfo)
 							if err == nil {
-								compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, compositeInfo.Aggregations)
+								compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, parsedSubAggs.CompositeInfo.Aggregations)
 								for k, v := range compositeAggs {
 									subAggs[k] = v
 								}
 							}
 						} else {
-							compositeAggs := h.buildCompositeAggregations(subSearchResult.Facets, compositeInfo.Aggregations)
+							compositeAggs := h.buildCompositeAggregations(subSearchResult.Facets, parsedSubAggs.CompositeInfo.Aggregations)
 							for k, v := range compositeAggs {
 								subAggs[k] = v
 							}
@@ -1115,12 +1171,33 @@ func (h *DocumentHandler) buildTopHitsAggregation(config *TopHitsAggregationConf
 	hits := make([]map[string]interface{}, 0, len(searchResult.Hits))
 	requestedFields := h.parseSourceField(config.Source)
 
-	// 获取文档数据
+	// 性能优化：复用单个IndexReader，避免每次调用idx.Document()都创建新的Reader
+	// 注意：这仍然是逐个获取文档，但复用Reader可以减少Reader创建/关闭的开销
 	docCache := make(map[string]map[string]interface{})
-	for _, hit := range searchResult.Hits {
-		doc, err := idx.Document(hit.ID)
-		if err == nil && doc != nil {
-			docCache[hit.ID] = h.extractDocumentFields(doc)
+	advancedIdx, idxErr := idx.Advanced()
+	if idxErr == nil {
+		reader, err := advancedIdx.Reader()
+		if err == nil {
+			defer reader.Close()
+			// 复用同一个Reader逐个获取文档
+			for _, hit := range searchResult.Hits {
+				doc, err := reader.Document(hit.ID)
+				if err == nil && doc != nil {
+					docCache[hit.ID] = h.extractDocumentFields(doc)
+				}
+			}
+		} else {
+			logger.Warn("Failed to create reader for top_hits aggregation: %v", err)
+		}
+	}
+
+	// 如果使用IndexReader失败，回退到原来的方法（每次调用idx.Document()都会创建新Reader）
+	if len(docCache) == 0 {
+		for _, hit := range searchResult.Hits {
+			doc, err := idx.Document(hit.ID) // 每次调用都会创建新Reader
+			if err == nil && doc != nil {
+				docCache[hit.ID] = h.extractDocumentFields(doc)
+			}
 		}
 	}
 
@@ -1227,16 +1304,16 @@ func (h *DocumentHandler) buildNestedFieldAggregations(nestedFieldInfo *NestedFi
 		if len(nestedFieldConfig.SubAggregations) > 0 {
 			logger.Debug("buildNestedFieldAggregations: processing sub-aggregations for [%s], count=%d", aggName, len(nestedFieldConfig.SubAggregations))
 
-			// 解析子聚合
-			facets, metricsInfo, compositeInfo, nestedInfo, filterInfo, topHitsInfo, subNestedFieldInfo, err := h.parseAggregations(nestedFieldConfig.SubAggregations)
+			// P2-1: 使用结构体封装返回值
+			parsedSubAggs, err := h.parseAggregations(nestedFieldConfig.SubAggregations)
 			if err != nil {
 				logger.Warn("Failed to parse sub-aggregations for nested field [%s]: %v", aggName, err)
-			} else {
+			} else if parsedSubAggs != nil {
 				// 创建搜索请求执行子聚合
 				subSearchReq := bleve.NewSearchRequest(combinedQuery)
 				subSearchReq.Size = 0
-				if len(facets) > 0 {
-					subSearchReq.Facets = facets
+				if len(parsedSubAggs.Facets) > 0 {
+					subSearchReq.Facets = parsedSubAggs.Facets
 				}
 
 				subSearchResult, err := idx.Search(subSearchReq)
@@ -1248,28 +1325,45 @@ func (h *DocumentHandler) buildNestedFieldAggregations(nestedFieldInfo *NestedFi
 
 					// 处理bucket聚合（terms, range, date_range）
 					if len(subSearchResult.Facets) > 0 {
-						facetAggs := h.buildAggregations(subSearchResult.Facets, compositeInfo, nestedInfo, topHitsInfo, subNestedFieldInfo, idx, combinedQuery)
+						facetAggs := h.buildAggregations(subSearchResult.Facets, parsedSubAggs.CompositeInfo, parsedSubAggs.NestedInfo, parsedSubAggs.TopHitsInfo, parsedSubAggs.NestedFieldInfo, idx, combinedQuery)
 						for k, v := range facetAggs {
 							subAggs[k] = v
 						}
 					}
 
 					// 处理metrics聚合
-					if metricsInfo != nil && len(metricsInfo.Aggregations) > 0 {
+					if parsedSubAggs.MetricsInfo != nil && len(parsedSubAggs.MetricsInfo.Aggregations) > 0 {
 						// 获取所有匹配的文档来计算metrics
 						allDocsReq := bleve.NewSearchRequest(combinedQuery)
 						allDocsReq.Size = 10000 // 限制大小，避免内存问题
 						allDocsResult, err := idx.Search(allDocsReq)
 						if err == nil {
-							// 创建docCache
+							// 性能优化：复用单个IndexReader，避免每次调用idx.Document()都创建新的Reader
 							docCache := make(map[string]map[string]interface{})
-							for _, hit := range allDocsResult.Hits {
-								doc, err := idx.Document(hit.ID)
-								if err == nil && doc != nil {
-									docCache[hit.ID] = h.extractDocumentFields(doc)
+							advancedIdx, idxErr := idx.Advanced()
+							if idxErr == nil {
+								reader, readerErr := advancedIdx.Reader()
+								if readerErr == nil {
+									defer reader.Close()
+									// 复用同一个Reader逐个获取文档（减少Reader创建/关闭开销）
+									for _, hit := range allDocsResult.Hits {
+										doc, docErr := reader.Document(hit.ID)
+										if docErr == nil && doc != nil {
+											docCache[hit.ID] = h.extractDocumentFields(doc)
+										}
+									}
 								}
 							}
-							metricsAggs, err := h.calculateMetricsAggregationsWithCache(allDocsResult, metricsInfo.Aggregations, docCache)
+							// 如果使用IndexReader失败，回退到原来的方法（每次调用idx.Document()都会创建新Reader）
+							if len(docCache) == 0 {
+								for _, hit := range allDocsResult.Hits {
+									doc, err := idx.Document(hit.ID) // 每次调用都会创建新Reader
+									if err == nil && doc != nil {
+										docCache[hit.ID] = h.extractDocumentFields(doc)
+									}
+								}
+							}
+							metricsAggs, err := h.calculateMetricsAggregationsWithCache(allDocsResult, parsedSubAggs.MetricsInfo.Aggregations, docCache)
 							if err == nil {
 								for k, v := range metricsAggs {
 									subAggs[k] = v
@@ -1279,10 +1373,10 @@ func (h *DocumentHandler) buildNestedFieldAggregations(nestedFieldInfo *NestedFi
 					}
 
 					// 处理composite聚合
-					if compositeInfo != nil && len(compositeInfo.Aggregations) > 0 {
+					if parsedSubAggs.CompositeInfo != nil && len(parsedSubAggs.CompositeInfo.Aggregations) > 0 {
 						// 检查是否有多字段 composite 聚合
 						hasMultiSourceComposite := false
-						for _, cfg := range compositeInfo.Aggregations {
+						for _, cfg := range parsedSubAggs.CompositeInfo.Aggregations {
 							if len(cfg.Sources) > 1 {
 								hasMultiSourceComposite = true
 								break
@@ -1290,15 +1384,15 @@ func (h *DocumentHandler) buildNestedFieldAggregations(nestedFieldInfo *NestedFi
 						}
 
 						if hasMultiSourceComposite {
-							allDocs, err := h.fetchAllDocsForCompositeAgg(idx, combinedQuery, compositeInfo)
+							allDocs, err := h.fetchAllDocsForCompositeAgg(idx, combinedQuery, parsedSubAggs.CompositeInfo)
 							if err == nil {
-								compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, compositeInfo.Aggregations)
+								compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, parsedSubAggs.CompositeInfo.Aggregations)
 								for k, v := range compositeAggs {
 									subAggs[k] = v
 								}
 							}
 						} else {
-							compositeAggs := h.buildCompositeAggregations(subSearchResult.Facets, compositeInfo.Aggregations)
+							compositeAggs := h.buildCompositeAggregations(subSearchResult.Facets, parsedSubAggs.CompositeInfo.Aggregations)
 							for k, v := range compositeAggs {
 								subAggs[k] = v
 							}
@@ -1306,16 +1400,16 @@ func (h *DocumentHandler) buildNestedFieldAggregations(nestedFieldInfo *NestedFi
 					}
 
 					// 处理filter聚合
-					if filterInfo != nil && len(filterInfo.Aggregations) > 0 {
-						filterAggs := h.buildFilterAggregations(filterInfo, idx, combinedQuery)
+					if parsedSubAggs.FilterInfo != nil && len(parsedSubAggs.FilterInfo.Aggregations) > 0 {
+						filterAggs := h.buildFilterAggregations(parsedSubAggs.FilterInfo, idx, combinedQuery)
 						for k, v := range filterAggs {
 							subAggs[k] = v
 						}
 					}
 
 					// 处理top_hits聚合
-					if topHitsInfo != nil && len(topHitsInfo.Aggregations) > 0 {
-						for topHitsName, topHitsConfig := range topHitsInfo.Aggregations {
+					if parsedSubAggs.TopHitsInfo != nil && len(parsedSubAggs.TopHitsInfo.Aggregations) > 0 {
+						for topHitsName, topHitsConfig := range parsedSubAggs.TopHitsInfo.Aggregations {
 							topHitsResult := h.buildTopHitsAggregation(topHitsConfig, idx, combinedQuery)
 							if topHitsResult != nil {
 								subAggs[topHitsName] = topHitsResult
@@ -1324,8 +1418,8 @@ func (h *DocumentHandler) buildNestedFieldAggregations(nestedFieldInfo *NestedFi
 					}
 
 					// 处理嵌套的nested字段聚合（递归）
-					if subNestedFieldInfo != nil && len(subNestedFieldInfo.Aggregations) > 0 {
-						subNestedFieldAggs := h.buildNestedFieldAggregations(subNestedFieldInfo, idx, combinedQuery)
+					if parsedSubAggs.NestedFieldInfo != nil && len(parsedSubAggs.NestedFieldInfo.Aggregations) > 0 {
+						subNestedFieldAggs := h.buildNestedFieldAggregations(parsedSubAggs.NestedFieldInfo, idx, combinedQuery)
 						for k, v := range subNestedFieldAggs {
 							subAggs[k] = v
 						}
@@ -1368,72 +1462,72 @@ func (h *DocumentHandler) fetchAllDocsForCompositeAgg(
 ) ([]map[string]interface{}, error) {
 	// 收集所有需要的字段
 	fieldsNeeded := make(map[string]bool)
+	fieldsList := make([]string, 0)
 	for _, cfg := range compositeAggInfo.Aggregations {
 		for _, source := range cfg.Sources {
-			fieldsNeeded[source.Terms.Field] = true
+			field := source.Terms.Field
+			if !fieldsNeeded[field] {
+				fieldsNeeded[field] = true
+				fieldsList = append(fieldsList, field)
+			}
 		}
 	}
 
-	// 创建搜索请求，获取所有匹配的文档
-	// 使用分页避免内存问题
-	const batchSize = 10000
+	// 性能优化：一次性搜索所有匹配的文档，并在搜索时直接返回字段数据
+	// 使用Bleve的Fields机制，让Bleve在搜索时自动填充hit.Fields
+	// 这样比搜索后再逐个获取文档更高效，因为：
+	// 1. Bleve内部可能对Reader有优化和复用
+	// 2. 字段数据已经在hit.Fields中，类型已转换好
+	// 3. 代码更简洁，不需要手动管理IndexReader
+	// 4. 避免了循环分页带来的多次搜索开销
+	const maxDocs = 1000000 // 最多处理100万文档
 	var allDocs []map[string]interface{}
 
-	advancedIdx, err := idx.Advanced()
+	// 一次性搜索所有匹配的文档（最多maxDocs条），并直接返回需要的字段
+	// 使用Bleve的Fields机制，避免循环分页和重复获取文档的开销
+	searchReq := bleve.NewSearchRequest(query)
+	searchReq.Size = maxDocs
+	searchReq.Fields = fieldsList // 设置Fields，让Bleve在搜索时自动填充hit.Fields
+
+	result, err := idx.Search(searchReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get advanced index: %w", err)
+		return nil, fmt.Errorf("failed to search: %w", err)
 	}
 
-	reader, err := advancedIdx.Reader()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get index reader: %w", err)
+	totalDocs := int(result.Total)
+	if totalDocs > maxDocs {
+		logger.Warn("fetchAllDocsForCompositeAgg: document count (%d) exceeds max limit (%d), processed first %d documents", totalDocs, maxDocs, len(result.Hits))
 	}
-	defer reader.Close()
 
-	// 使用 bleve 搜索获取所有匹配的文档 ID
-	from := 0
-	for {
-		searchReq := bleve.NewSearchRequestOptions(query, batchSize, from, false)
-		searchReq.Fields = []string{} // 不需要返回字段，我们会单独获取
+	// 预分配容量以提高性能
+	if len(result.Hits) > 0 {
+		allDocs = make([]map[string]interface{}, 0, len(result.Hits))
+	}
 
-		result, err := idx.Search(searchReq)
-		if err != nil {
-			return nil, fmt.Errorf("failed to search: %w", err)
+	// 直接从hit.Fields中提取字段值，不需要再调用Document()
+	// 这比循环分页获取文档更高效，因为：
+	// 1. 只需要一次搜索操作
+	// 2. 字段数据已经在hit.Fields中，类型已转换好
+	// 3. 避免了多次搜索和Reader创建/关闭的开销
+	for _, hit := range result.Hits {
+		if hit.Fields == nil {
+			continue
 		}
 
-		if len(result.Hits) == 0 {
-			break
+		// 只保留需要的字段
+		filteredDoc := make(map[string]interface{}, len(fieldsNeeded))
+		for field := range fieldsNeeded {
+			if val, ok := hit.Fields[field]; ok {
+				// hit.Fields中的值已经是转换好的类型，直接使用
+				filteredDoc[field] = val
+			}
 		}
-
-		// 获取每个文档的字段值
-		for _, hit := range result.Hits {
-			doc, err := reader.Document(hit.ID)
-			if err != nil || doc == nil {
-				continue
-			}
-
-			docFields := h.extractDocumentFields(doc)
-			// 只保留需要的字段
-			filteredDoc := make(map[string]interface{})
-			for field := range fieldsNeeded {
-				if val := getNestedFieldValue(docFields, field); val != nil {
-					filteredDoc[field] = val
-				}
-			}
+		if len(filteredDoc) > 0 {
 			allDocs = append(allDocs, filteredDoc)
 		}
-
-		from += batchSize
-		if len(result.Hits) < batchSize {
-			break
-		}
-
-		// 安全限制：最多处理 100 万文档
-		if from >= 1000000 {
-			logger.Warn("Composite aggregation hit 1M document limit")
-			break
-		}
 	}
+
+	logger.Debug("fetchAllDocsForCompositeAgg: fetched %d documents with fields in one search (using Bleve Fields mechanism, total=%d)", len(allDocs), totalDocs)
 
 	return allDocs, nil
 }

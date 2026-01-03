@@ -858,3 +858,172 @@ func TestESCompatibility(t *testing.T) {
 		})
 	}
 }
+
+// TestSwitchStatement 测试switch语句
+func TestSwitchStatement(t *testing.T) {
+	engine := NewEngine()
+	ctx := NewContext(nil, nil, nil)
+
+	tests := []struct {
+		name   string
+		source string
+		want   interface{}
+	}{
+		{
+			name:   "switch with case match",
+			source: "switch (1) { case 1: return 'one'; case 2: return 'two'; default: return 'other'; }",
+			want:   "one",
+		},
+		{
+			name:   "switch with default",
+			source: "switch (3) { case 1: return 'one'; case 2: return 'two'; default: return 'other'; }",
+			want:   "other",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := NewScript(tt.source, nil)
+			got, err := engine.Execute(script, ctx)
+			if err != nil {
+				t.Errorf("Execute() error = %v", err)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("Execute() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDoWhileLoop 测试do-while循环
+func TestDoWhileLoop(t *testing.T) {
+	engine := NewEngine()
+	ctx := NewContext(nil, nil, nil)
+
+	tests := []struct {
+		name   string
+		source string
+		want   interface{}
+	}{
+		{
+			name:   "do-while executes at least once",
+			source: "def x = 0;\ndo {\nx = x + 1;\n} while (x < 1);\nreturn x;",
+			want:   float64(1),
+		},
+		{
+			name:   "do-while with condition",
+			source: "def x = 0;\ndo {\nx = x + 1;\n} while (x < 3);\nreturn x;",
+			want:   float64(3),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := NewScript(tt.source, nil)
+			got, err := engine.Execute(script, ctx)
+			if err != nil {
+				t.Errorf("Execute() error = %v", err)
+				return
+			}
+			if wantFloat, ok := tt.want.(float64); ok {
+				gotFloat := toFloat64(got)
+				if math.Abs(gotFloat-wantFloat) > 0.0001 {
+					t.Errorf("Execute() = %v, want %v", got, tt.want)
+				}
+			} else if got != tt.want {
+				t.Errorf("Execute() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBreakContinue 测试break和continue语句
+func TestBreakContinue(t *testing.T) {
+	engine := NewEngine()
+	ctx := NewContext(nil, nil, nil)
+
+	tests := []struct {
+		name   string
+		source string
+		want   interface{}
+	}{
+		{
+			name:   "break in for loop",
+			source: "def x = 0; for (def i = 0; i < 10; i = i + 1) { if (i == 5) { break; } x = x + 1; } return x;",
+			want:   float64(5),
+		},
+		{
+			name:   "continue in for loop",
+			source: "def x = 0; for (def i = 0; i < 5; i = i + 1) { if (i == 2) { continue; } x = x + 1; } return x;",
+			want:   float64(4),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := NewScript(tt.source, nil)
+			got, err := engine.Execute(script, ctx)
+			if err != nil {
+				t.Errorf("Execute() error = %v", err)
+				return
+			}
+			if wantFloat, ok := tt.want.(float64); ok {
+				gotFloat := toFloat64(got)
+				if math.Abs(gotFloat-wantFloat) > 0.0001 {
+					t.Errorf("Execute() = %v, want %v", got, tt.want)
+				}
+			} else if got != tt.want {
+				t.Errorf("Execute() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDateOperations 测试日期操作
+func TestDateOperations(t *testing.T) {
+	engine := NewEngine()
+	ctx := NewContext(nil, nil, nil)
+
+	tests := []struct {
+		name   string
+		source string
+		want   interface{}
+	}{
+		{
+			name:   "Date.parse ISO format",
+			source: "Date.parse('2024-01-15')",
+			want:   float64(1705276800000), // 2024-01-15 00:00:00 UTC 的时间戳（毫秒）
+		},
+		{
+			name:   "Date.add days",
+			source: "Date.add(1705276800000, 'days', 7)",
+			want:   float64(1705881600000), // 2024-01-22 00:00:00 UTC
+		},
+		{
+			name:   "Date.subtract days",
+			source: "Date.subtract(1705276800000, 'days', 7)",
+			want:   float64(1704672000000), // 2024-01-08 00:00:00 UTC
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := NewScript(tt.source, nil)
+			got, err := engine.Execute(script, ctx)
+			if err != nil {
+				t.Errorf("Execute() error = %v", err)
+				return
+			}
+			if wantFloat, ok := tt.want.(float64); ok {
+				gotFloat := toFloat64(got)
+				// 允许1小时的误差（由于时区差异）
+				if math.Abs(gotFloat-wantFloat) > 3600000 {
+					t.Errorf("Execute() = %v, want %v (diff: %v)", got, tt.want, math.Abs(gotFloat-wantFloat))
+				}
+			} else if got != tt.want {
+				t.Errorf("Execute() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

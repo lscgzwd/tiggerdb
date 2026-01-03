@@ -28,13 +28,27 @@ import (
 
 // QueryParser ES Query DSL解析器
 type QueryParser struct {
-	optimizer *QueryOptimizer // 查询优化器
+	optimizer *QueryOptimizer      // 查询优化器
+	registry  *QueryParserRegistry // P2-2: 查询解析策略注册表（策略模式）
 }
 
 // NewQueryParser 创建新的查询解析器
 func NewQueryParser() *QueryParser {
-	return &QueryParser{
-		optimizer: NewQueryOptimizer(), // 默认启用优化器
+	parser := &QueryParser{
+		optimizer: NewQueryOptimizer(),      // 默认启用优化器
+		registry:  NewQueryParserRegistry(), // P2-2: 初始化策略注册表
+	}
+	// P2-2: 设置所有策略的parser引用
+	parser.setupStrategies()
+	return parser
+}
+
+// setupStrategies P2-2: 设置所有策略的parser引用
+func (p *QueryParser) setupStrategies() {
+	for _, strategy := range p.registry.strategies {
+		if baseStrategy, ok := strategy.(interface{ SetParser(*QueryParser) }); ok {
+			baseStrategy.SetParser(p)
+		}
 	}
 }
 
@@ -85,104 +99,17 @@ func (p *QueryParser) ParseQuery(queryMap map[string]interface{}) (query.Query, 
 		return nil, fmt.Errorf("query object must contain exactly one query type, but found %d types: %v", len(queryMap), queryTypes)
 	}
 
-	// 遍历查询类型（此时应该只有一个）
+	// P2-2: 使用策略模式解析查询（替代大的switch语句，提升可维护性和扩展性）
 	for queryType, queryBody := range queryMap {
-		var parsedQuery query.Query
-		var err error
-
-		switch queryType {
-		case "match_all":
-			parsedQuery, err = p.parseMatchAll(queryBody)
-		case "match":
-			parsedQuery, err = p.parseMatch(queryBody)
-		case "match_phrase":
-			parsedQuery, err = p.parseMatchPhrase(queryBody)
-		case "match_phrase_prefix":
-			parsedQuery, err = p.parseMatchPhrasePrefix(queryBody)
-		case "term":
-			parsedQuery, err = p.parseTerm(queryBody)
-		case "terms":
-			parsedQuery, err = p.parseTerms(queryBody)
-		case "range":
-			parsedQuery, err = p.parseRange(queryBody)
-		case "bool":
-			parsedQuery, err = p.parseBool(queryBody)
-		case "wildcard":
-			parsedQuery, err = p.parseWildcard(queryBody)
-		case "prefix":
-			parsedQuery, err = p.parsePrefix(queryBody)
-		case "fuzzy":
-			parsedQuery, err = p.parseFuzzy(queryBody)
-		case "regexp":
-			parsedQuery, err = p.parseRegexp(queryBody)
-		case "exists":
-			parsedQuery, err = p.parseExists(queryBody)
-		case "nested":
-			parsedQuery, err = p.parseNested(queryBody)
-		case "multi_match":
-			parsedQuery, err = p.parseMultiMatch(queryBody)
-		case "query_string":
-			parsedQuery, err = p.parseQueryString(queryBody)
-		case "ids":
-			parsedQuery, err = p.parseIds(queryBody)
-		case "match_none":
-			parsedQuery, err = p.parseMatchNone(queryBody)
-		case "match_bool_prefix":
-			parsedQuery, err = p.parseMatchBoolPrefix(queryBody)
-		case "constant_score":
-			parsedQuery, err = p.parseConstantScore(queryBody)
-		case "dis_max":
-			parsedQuery, err = p.parseDisMax(queryBody)
-		case "simple_query_string":
-			parsedQuery, err = p.parseSimpleQueryString(queryBody)
-		case "geo_bounding_box":
-			parsedQuery, err = p.parseGeoBoundingBox(queryBody)
-		case "geo_distance":
-			parsedQuery, err = p.parseGeoDistance(queryBody)
-		case "geo_polygon":
-			parsedQuery, err = p.parseGeoPolygon(queryBody)
-		case "geo_shape":
-			parsedQuery, err = p.parseGeoShape(queryBody)
-		case "common":
-			parsedQuery, err = p.parseCommon(queryBody)
-		case "more_like_this":
-			parsedQuery, err = p.parseMoreLikeThis(queryBody)
-		case "script":
-			parsedQuery, err = p.parseScript(queryBody)
-		case "script_score":
-			parsedQuery, err = p.parseScriptScore(queryBody)
-		case "function_score":
-			parsedQuery, err = p.parseFunctionScore(queryBody)
-		case "pinned":
-			parsedQuery, err = p.parsePinned(queryBody)
-		case "wrapper":
-			parsedQuery, err = p.parseWrapper(queryBody)
-		case "percolate":
-			parsedQuery, err = p.parsePercolate(queryBody)
-		case "span_term":
-			parsedQuery, err = p.parseSpanTerm(queryBody)
-		case "span_near":
-			parsedQuery, err = p.parseSpanNear(queryBody)
-		case "span_or":
-			parsedQuery, err = p.parseSpanOr(queryBody)
-		case "span_not":
-			parsedQuery, err = p.parseSpanNot(queryBody)
-		case "span_first":
-			parsedQuery, err = p.parseSpanFirst(queryBody)
-		case "span_containing":
-			parsedQuery, err = p.parseSpanContaining(queryBody)
-		case "span_within":
-			parsedQuery, err = p.parseSpanWithin(queryBody)
-		case "span_multi":
-			parsedQuery, err = p.parseSpanMulti(queryBody)
-		case "has_child":
-			parsedQuery, err = p.parseHasChild(queryBody)
-		case "has_parent":
-			parsedQuery, err = p.parseHasParent(queryBody)
-		default:
+		// 从注册表获取策略
+		strategy, exists := p.registry.Get(queryType)
+		if !exists {
 			logger.Warn("Unsupported query type: %s", queryType)
 			return nil, fmt.Errorf("unsupported query type: %s", queryType)
 		}
+
+		// 使用策略解析查询
+		parsedQuery, err := strategy.Parse(queryBody)
 
 		// 如果解析出错，直接返回错误
 		if err != nil {

@@ -16,6 +16,7 @@ package es
 
 import (
 	"github.com/lscgzwd/tiggerdb/protocols/es/http/server"
+	"github.com/lscgzwd/tiggerdb/protocols/es/middleware"
 )
 
 // Config ES协议服务器配置
@@ -25,6 +26,9 @@ type Config struct {
 
 	// HTTP服务器配置
 	ServerConfig *server.ServerConfig `json:"server_config" yaml:"server_config"`
+
+	// 认证配置
+	Auth *middleware.AuthConfig `json:"auth" yaml:"auth"`
 }
 
 // DefaultConfig 返回默认ES配置
