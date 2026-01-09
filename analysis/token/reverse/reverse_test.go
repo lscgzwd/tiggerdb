@@ -40,7 +40,8 @@ func TestReverseFilter(t *testing.T) {
 			Term: []byte("what's this in reverse"),
 		},
 		&analysis.Token{
-			Term: []byte("œ∑´®�?),
+			// 使用一组拉丁扩展和符号字符，验证反转算法对多字节字符的处理
+			Term: []byte("œ∑´®†"),
 		},
 		&analysis.Token{
 			Term: []byte("İȺȾCAT÷≥≤µ123"),

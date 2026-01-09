@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lscgzwd/tiggerdb/geo"
 	"github.com/lscgzwd/tiggerdb/mapping"
 )
 

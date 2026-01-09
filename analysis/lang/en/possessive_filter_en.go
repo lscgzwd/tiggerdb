@@ -26,19 +26,50 @@ const Name = "possessive_en"
 // PossessiveName is the same as Name
 const PossessiveName = Name
 
-// 's or ' (Apostrophe S or Apostrophe)
-var possessive = []byte{39, 115}
+// 's or 'S or ' (Apostrophe S or Apostrophe)
+var possessiveLower = []byte{39, 115} // 's
+var possessiveUpper = []byte{39, 83}  // 'S
+
+// Unicode possessive markers: U+2019 (RIGHT SINGLE QUOTATION MARK) and U+FF07 (FULLWIDTH APOSTROPHE)
+var possessiveUnicode = [][]byte{
+	{0xE2, 0x80, 0x99, 0x73}, // 's (U+2019 + 's')
+	{0xE2, 0x80, 0x99, 0x53}, // 'S (U+2019 + 'S')
+	{0xEF, 0xBC, 0x87, 0x73}, // ＇s (U+FF07 + 's')
+	{0xEF, 0xBC, 0x87, 0x53}, // ＇S (U+FF07 + 'S')
+	{0xE2, 0x80, 0x99},       // ' (U+2019)
+	{0xEF, 0xBC, 0x87},       // ＇ (U+FF07)
+}
 
 func PossessiveFilter(input analysis.TokenStream) analysis.TokenStream {
 	rv := make(analysis.TokenStream, 0, len(input))
 
 	for _, token := range input {
 		rv = append(rv, token)
-		// if token ends in 's remove the 's
-		if bytes.HasSuffix(token.Term, possessive) {
-			token.Term = token.Term[:len(token.Term)-2]
-		} else if token.Term[len(token.Term)-1] == 39 { // '
-			token.Term = token.Term[:len(token.Term)-1]
+		term := token.Term
+
+		if len(term) == 0 {
+			continue
+		}
+
+		// Check for ASCII 's or 'S first
+		if bytes.HasSuffix(term, possessiveLower) || bytes.HasSuffix(term, possessiveUpper) {
+			token.Term = term[:len(term)-2]
+			continue
+		}
+
+		// Check for Unicode possessive markers
+		removed := false
+		for _, unicodePossessive := range possessiveUnicode {
+			if bytes.HasSuffix(term, unicodePossessive) {
+				token.Term = term[:len(term)-len(unicodePossessive)]
+				removed = true
+				break
+			}
+		}
+
+		// If no Unicode possessive found, check for ASCII apostrophe
+		if !removed && len(term) > 0 && term[len(term)-1] == 39 { // '
+			token.Term = term[:len(term)-1]
 		}
 	}
 

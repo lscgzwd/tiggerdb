@@ -41,7 +41,8 @@ func TestDefaultFileSystem_DirectoryOperations(t *testing.T) {
 		t.Fatalf("Failed to create directory: %v", err)
 	}
 
-	// 测试目录存在性检�?	if !fs.DirExists(testDir) {
+	// 测试目录存在性检查
+	if !fs.DirExists(testDir) {
 		t.Fatal("Directory should exist after creation")
 	}
 
@@ -60,7 +61,8 @@ func TestDefaultFileSystem_DirectoryOperations(t *testing.T) {
 		t.Fatal("Directory should contain at least one entry")
 	}
 
-	// 查找我们创建的目�?	found := false
+	// 查找我们创建的目录
+	found := false
 	for _, entry := range entries {
 		if entry.Name() == "test_dir" && entry.IsDir() {
 			found = true
@@ -94,7 +96,8 @@ func TestDefaultFileSystem_FileOperations(t *testing.T) {
 	testFile := filepath.Join(tempDir, "test_file.txt")
 	testContent := []byte("Hello, TigerDB!")
 
-	// 测试创建和写入文�?	file, err := fs.CreateFile(testFile, 0644)
+	// 测试创建和写入文件
+	file, err := fs.CreateFile(testFile, 0644)
 	if err != nil {
 		t.Fatalf("Failed to create file: %v", err)
 	}
@@ -105,7 +108,8 @@ func TestDefaultFileSystem_FileOperations(t *testing.T) {
 	}
 	file.Close()
 
-	// 测试文件存在性检�?	if !fs.FileExists(testFile) {
+	// 测试文件存在性检查
+	if !fs.FileExists(testFile) {
 		t.Fatal("File should exist after creation")
 	}
 
@@ -237,7 +241,7 @@ func TestDirectoryOperations_CreateDirIfNotExists(t *testing.T) {
 		t.Fatal("Directory should exist after creation")
 	}
 
-	// 目录已存在时不报�?	err = dirOps.CreateDirIfNotExists(testDir, 0755)
+	// 目录已存在时不报�?	err = dirOps.CreateDirIfNotExists(testDir, 0755)
 	if err != nil {
 		t.Fatalf("Should not error when directory already exists: %v", err)
 	}
@@ -253,7 +257,8 @@ func TestDirectoryOperations_IsEmptyDir(t *testing.T) {
 	fs := directory.NewDefaultFileSystem()
 	dirOps := directory.NewDirectoryOperations(fs)
 
-	// 测试空目�?	empty, err := dirOps.IsEmptyDir(tempDir)
+	// 测试空目录
+	empty, err := dirOps.IsEmptyDir(tempDir)
 	if err != nil {
 		t.Fatalf("Failed to check empty dir: %v", err)
 	}
@@ -302,7 +307,8 @@ func TestDirectoryOperations_RemoveDirIfEmpty(t *testing.T) {
 		t.Fatalf("Failed to create empty dir: %v", err)
 	}
 
-	// 删除空目�?	err = dirOps.RemoveDirIfEmpty(emptyDir)
+	// 删除空目录
+	err = dirOps.RemoveDirIfEmpty(emptyDir)
 	if err != nil {
 		t.Fatalf("Failed to remove empty dir: %v", err)
 	}
@@ -311,7 +317,8 @@ func TestDirectoryOperations_RemoveDirIfEmpty(t *testing.T) {
 		t.Fatal("Empty directory should be removed")
 	}
 
-	// 创建非空子目�?	nonEmptyDir := filepath.Join(tempDir, "nonempty_dir")
+	// 创建非空子目录
+	nonEmptyDir := filepath.Join(tempDir, "nonempty_dir")
 	err = fs.CreateDir(nonEmptyDir, 0755)
 	if err != nil {
 		t.Fatalf("Failed to create nonempty dir: %v", err)
@@ -345,7 +352,8 @@ func TestDirectoryOperations_GetDirSize(t *testing.T) {
 	fs := directory.NewDefaultFileSystem()
 	dirOps := directory.NewDirectoryOperations(fs)
 
-	// 测试空目录大�?	size, err := dirOps.GetDirSize(tempDir)
+	// 测试空目录大小
+	size, err := dirOps.GetDirSize(tempDir)
 	if err != nil {
 		t.Fatalf("Failed to get empty dir size: %v", err)
 	}
@@ -370,7 +378,8 @@ func TestDirectoryOperations_GetDirSize(t *testing.T) {
 		t.Fatalf("Failed to create test file 2: %v", err)
 	}
 
-	// 测试包含文件的目录大�?	size, err = dirOps.GetDirSize(tempDir)
+	// 测试包含文件的目录大小
+	size, err = dirOps.GetDirSize(tempDir)
 	if err != nil {
 		t.Fatalf("Failed to get dir size with files: %v", err)
 	}
@@ -391,31 +400,35 @@ func TestDirectoryOperations_CleanOldFiles(t *testing.T) {
 	fs := directory.NewDefaultFileSystem()
 	dirOps := directory.NewDirectoryOperations(fs)
 
-	// 创建新文�?	newFile := filepath.Join(tempDir, "new.txt")
+	// 创建新文件
+	newFile := filepath.Join(tempDir, "new.txt")
 	err = fs.WriteFile(newFile, []byte("new"), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create new file: %v", err)
 	}
 
-	// 创建旧文件（修改时间设为过去�?	oldFile := filepath.Join(tempDir, "old.txt")
+	// 创建旧文件（修改时间设为过去）
+	oldFile := filepath.Join(tempDir, "old.txt")
 	err = fs.WriteFile(oldFile, []byte("old"), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create old file: %v", err)
 	}
 
-	// 修改旧文件的时间�?0天前
+	// 修改旧文件的时间为30天前
 	oldTime := time.Now().Add(-30 * 24 * time.Hour)
 	err = os.Chtimes(oldFile, oldTime, oldTime)
 	if err != nil {
 		t.Fatalf("Failed to change file time: %v", err)
 	}
 
-	// 清理7天前的文�?	err = dirOps.CleanOldFiles(tempDir, 7*24*time.Hour)
+	// 清理7天前的文件
+	err = dirOps.CleanOldFiles(tempDir, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Failed to clean old files: %v", err)
 	}
 
-	// 验证新文件仍然存�?	if !fs.FileExists(newFile) {
+	// 验证新文件仍然存在
+	if !fs.FileExists(newFile) {
 		t.Fatal("New file should still exist")
 	}
 

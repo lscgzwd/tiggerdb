@@ -178,7 +178,11 @@ func TestMatchQueryAccuracy(t *testing.T) {
 					"content": "search",
 				},
 			},
-			expectedIDs: []string{"doc1", "doc2"},
+			// 注意：doc1 的 content 包含独立的 "search" 词："Elasticsearch is a distributed search and analytics engine"
+			// doc2 的 content 是 "TigerDB is compatible with Elasticsearch API and provides high performance"
+			// "Elasticsearch" 被分词为一个词 "elasticsearch"，不包含独立的 "search" 词
+			// 所以只匹配 doc1
+			expectedIDs: []string{"doc1"},
 		},
 		{
 			name: "match author John Smith",

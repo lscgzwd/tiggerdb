@@ -21,12 +21,13 @@ import (
 	"testing"
 	"time"
 
+	index "github.com/blevesearch/bleve_index_api"
 	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/geo"
 	"github.com/lscgzwd/tiggerdb/index/scorch"
 	"github.com/lscgzwd/tiggerdb/search"
 	"github.com/lscgzwd/tiggerdb/search/facet"
 	"github.com/lscgzwd/tiggerdb/search/searcher"
-	index "github.com/blevesearch/bleve_index_api"
 )
 
 func TestTop10Scores(t *testing.T) {

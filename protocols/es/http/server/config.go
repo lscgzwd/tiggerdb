@@ -75,7 +75,7 @@ func DefaultServerConfig() *ServerConfig {
 		Port: 9200,
 
 		// 超时配置
-		ReadTimeout:       60 * time.Second,  // 读取超时 60 秒
+		ReadTimeout:       30 * time.Second,  // 读取超时 30 秒
 		WriteTimeout:      120 * time.Second, // 写入超时 120 秒，允许慢查询
 		IdleTimeout:       300 * time.Second, // 空闲超时 5 分钟，避免频繁断开 Keep-Alive 连接
 		ReadHeaderTimeout: 10 * time.Second,
@@ -117,8 +117,9 @@ func DefaultServerConfig() *ServerConfig {
 
 // Validate 验证配置
 func (c *ServerConfig) Validate() error {
-	if c.Port < 1 || c.Port > 65535 {
-		return fmt.Errorf("invalid port: %d (must be between 1 and 65535)", c.Port)
+	// 允许端口 0（系统自动分配）用于测试场景
+	if c.Port != 0 && (c.Port < 1 || c.Port > 65535) {
+		return fmt.Errorf("invalid port: %d (must be between 1 and 65535, or 0 for automatic assignment)", c.Port)
 	}
 
 	if c.MaxConnections < 1 {

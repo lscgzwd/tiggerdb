@@ -113,7 +113,9 @@ func TestESIntegration_CompleteWorkflow(t *testing.T) {
 			},
 		}
 		bodyBytes, _ := json.Marshal(reqBody)
-		resp, err := http.Post(baseURL+"/"+indexName, "application/json", bytes.NewReader(bodyBytes))
+		req, _ := http.NewRequest("PUT", baseURL+"/"+indexName, bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("Failed to create index: %v", err)
 		}
@@ -131,7 +133,9 @@ func TestESIntegration_CompleteWorkflow(t *testing.T) {
 			"price": 99.99,
 		}
 		bodyBytes, _ := json.Marshal(docBody)
-		resp, err := http.Post(baseURL+"/"+indexName+"/_doc/"+docID, "application/json", bytes.NewReader(bodyBytes))
+		req, _ := http.NewRequest("PUT", baseURL+"/"+indexName+"/_doc/"+docID, bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("Failed to index document: %v", err)
 		}
@@ -261,10 +265,21 @@ func TestESIntegration_BulkOperations(t *testing.T) {
 
 	indexName := "test_bulk_index"
 
-	// 创建索引
+	// 创建索引（使用 PUT 方法）
 	reqBody := map[string]interface{}{}
 	bodyBytes, _ := json.Marshal(reqBody)
-	http.Post(baseURL+"/"+indexName, "application/json", bytes.NewReader(bodyBytes))
+	req, _ := http.NewRequest("PUT", baseURL+"/"+indexName, bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to create index: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Failed to create index: status %d", resp.StatusCode)
+	}
+	// 等待索引创建完成
+	time.Sleep(100 * time.Millisecond)
 
 	// 准备批量数据
 	bulkData := `{"index":{"_index":"` + indexName + `","_id":"1"}}
@@ -276,7 +291,7 @@ func TestESIntegration_BulkOperations(t *testing.T) {
 `
 
 	// 执行批量操作
-	resp, err := http.Post(baseURL+"/_bulk", "application/x-ndjson", bytes.NewReader([]byte(bulkData)))
+	resp, err = http.Post(baseURL+"/_bulk", "application/x-ndjson", bytes.NewReader([]byte(bulkData)))
 	if err != nil {
 		t.Fatalf("Failed to execute bulk: %v", err)
 	}
@@ -294,19 +309,46 @@ func TestESIntegration_BulkOperations(t *testing.T) {
 		},
 		"size": 0,
 	}
-	bodyBytes, _ = json.Marshal(searchBody)
-	resp, err = http.Post(baseURL+"/"+indexName+"/_search", "application/json", bytes.NewReader(bodyBytes))
+	searchBodyBytes, _ := json.Marshal(searchBody)
+	resp, err = http.Post(baseURL+"/"+indexName+"/_search", "application/json", bytes.NewReader(searchBodyBytes))
 	if err != nil {
 		t.Fatalf("Failed to search: %v", err)
 	}
 	defer resp.Body.Close()
 
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-	hits := result["hits"].(map[string]interface{})
-	total := hits["total"].(map[string]interface{})
-	if total["value"].(float64) != 3 {
-		t.Errorf("Expected 3 documents, got %v", total["value"])
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode search response: %v", err)
+	}
+
+	// 检查是否有错误
+	if errorInfo, ok := result["error"].(map[string]interface{}); ok {
+		t.Fatalf("Search failed with error: %v", errorInfo)
+	}
+
+	hits, ok := result["hits"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Invalid search response format: %v", result)
+	}
+
+	total, ok := hits["total"].(map[string]interface{})
+	if !ok {
+		// 尝试直接获取 total 值（可能是数字格式）
+		if totalVal, ok := hits["total"].(float64); ok {
+			if totalVal != 3 {
+				t.Errorf("Expected 3 documents, got %v", totalVal)
+			}
+			return
+		}
+		t.Fatalf("Invalid total format in search response: %v", hits["total"])
+	}
+
+	if totalVal, ok := total["value"].(float64); ok {
+		if totalVal != 3 {
+			t.Errorf("Expected 3 documents, got %v", totalVal)
+		}
+	} else {
+		t.Errorf("Invalid total value format: %v", total["value"])
 	}
 }
 
@@ -331,7 +373,10 @@ func TestESIntegration_Aggregations(t *testing.T) {
 		},
 	}
 	bodyBytes, _ := json.Marshal(reqBody)
-	http.Post(baseURL+"/"+indexName, "application/json", bytes.NewReader(bodyBytes))
+	req, _ := http.NewRequest("PUT", baseURL+"/"+indexName, bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	http.DefaultClient.Do(req)
+	time.Sleep(100 * time.Millisecond) // 等待索引创建完成
 
 	// 索引测试数据
 	docs := []map[string]interface{}{
@@ -341,8 +386,11 @@ func TestESIntegration_Aggregations(t *testing.T) {
 	}
 	for i, doc := range docs {
 		bodyBytes, _ := json.Marshal(doc)
-		http.Post(fmt.Sprintf("%s/%s/_doc/%d", baseURL, indexName, i), "application/json", bytes.NewReader(bodyBytes))
+		req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/%s/_doc/%d", baseURL, indexName, i), bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		http.DefaultClient.Do(req)
 	}
+	time.Sleep(100 * time.Millisecond) // 等待索引完成
 
 	time.Sleep(200 * time.Millisecond) // 等待索引完成
 

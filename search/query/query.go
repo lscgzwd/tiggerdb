@@ -782,3 +782,134 @@ func addSynonymsForTerm(ctx context.Context, src, field, term string,
 	}
 	return rv, nil
 }
+
+// TermDocCountMap stores the document frequency for each term in each field
+// field -> term -> docCount
+type TermDocCountMap map[string]map[string]uint64
+
+// ExtractTermDocCounts extracts terms from the query tree and returns a map of
+// field-term pairs to their document counts. This is used for GlobalScoring
+// to ensure consistent BM25 scoring across partitions.
+func ExtractTermDocCounts(ctx context.Context, m mapping.IndexMapping, r index.IndexReader,
+	query Query, rv TermDocCountMap,
+) (TermDocCountMap, error) {
+	if r == nil || m == nil || query == nil {
+		return rv, nil
+	}
+	var err error
+	resolveField := func(field string) string {
+		if field == "" {
+			field = m.DefaultSearchField()
+		}
+		return field
+	}
+	handleAnalyzer := func(analyzerName, field string) (analysis.Analyzer, error) {
+		if analyzerName == "" {
+			analyzerName = m.AnalyzerNameForPath(field)
+		}
+		analyzer := m.AnalyzerNamed(analyzerName)
+		if analyzer == nil {
+			return nil, fmt.Errorf("no analyzer named '%s' registered", analyzerName)
+		}
+		return analyzer, nil
+	}
+	addTermDocCount := func(field, term string) error {
+		if rv == nil {
+			rv = make(TermDocCountMap)
+		}
+		if rv[field] == nil {
+			rv[field] = make(map[string]uint64)
+		}
+		// 如果已经收集过这个词，跳过
+		if _, exists := rv[field][term]; exists {
+			return nil
+		}
+		// 获取这个词的文档频率
+		tfr, err := r.TermFieldReader(ctx, []byte(term), field, false, false, false)
+		if err != nil {
+			return err
+		}
+		defer tfr.Close()
+		rv[field][term] = tfr.Count()
+		return nil
+	}
+
+	switch q := query.(type) {
+	case *BooleanQuery:
+		rv, err = ExtractTermDocCounts(ctx, m, r, q.Must, rv)
+		if err != nil {
+			return nil, err
+		}
+		rv, err = ExtractTermDocCounts(ctx, m, r, q.Should, rv)
+		if err != nil {
+			return nil, err
+		}
+		rv, err = ExtractTermDocCounts(ctx, m, r, q.MustNot, rv)
+		if err != nil {
+			return nil, err
+		}
+	case *ConjunctionQuery:
+		for _, child := range q.Conjuncts {
+			rv, err = ExtractTermDocCounts(ctx, m, r, child, rv)
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *DisjunctionQuery:
+		for _, child := range q.Disjuncts {
+			rv, err = ExtractTermDocCounts(ctx, m, r, child, rv)
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *TermQuery:
+		field := resolveField(q.FieldVal)
+		// TermQuery 的词是原始词，通常已经是小写的
+		term := strings.ToLower(q.Term)
+		err = addTermDocCount(field, term)
+		if err != nil {
+			return nil, err
+		}
+	case *MatchQuery:
+		field := resolveField(q.FieldVal)
+		analyzer, err := handleAnalyzer(q.Analyzer, field)
+		if err != nil {
+			return nil, err
+		}
+		tokens := analyzer.Analyze([]byte(q.Match))
+		for _, token := range tokens {
+			err = addTermDocCount(field, string(token.Term))
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *MatchPhraseQuery:
+		field := resolveField(q.FieldVal)
+		analyzer, err := handleAnalyzer(q.Analyzer, field)
+		if err != nil {
+			return nil, err
+		}
+		tokens := analyzer.Analyze([]byte(q.MatchPhrase))
+		for _, token := range tokens {
+			err = addTermDocCount(field, string(token.Term))
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *PrefixQuery:
+		// PrefixQuery 不适合收集精确的 docTerm，跳过
+	case *WildcardQuery:
+		// WildcardQuery 不适合收集精确的 docTerm，跳过
+	case *RegexpQuery:
+		// RegexpQuery 不适合收集精确的 docTerm，跳过
+	case *FuzzyQuery:
+		// FuzzyQuery 可能匹配多个词，这里只收集原始词
+		field := resolveField(q.FieldVal)
+		term := strings.ToLower(q.Term)
+		err = addTermDocCount(field, term)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rv, nil
+}

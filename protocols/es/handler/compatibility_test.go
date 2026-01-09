@@ -147,13 +147,20 @@ func TestCompatibility_ComplexBoolQuery(t *testing.T) {
 		t.Fatalf("Search failed: %s", searchW.Body.String())
 	}
 
-	// 应该返回iPhone 15（符合条件）
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":1,"relation":"eq"}`) {
-		t.Fatalf("Expected 1 result, got: %s", searchW.Body.String())
+	// 应该返回iPhone 15和Wireless Headphones（都符合条件：category=electronics, price<1500, rating>=4.0）
+	// iPhone 15: price=999.99, rating=4.2 ✓
+	// Wireless Headphones: price=199.99, rating=4.3 ✓
+	// 检查总数为2（不依赖JSON字段顺序）
+	if !strings.Contains(searchW.Body.String(), `"value":2`) || !strings.Contains(searchW.Body.String(), `"relation":"eq"`) {
+		t.Fatalf("Expected 2 results, got: %s", searchW.Body.String())
 	}
 
 	if !strings.Contains(searchW.Body.String(), `"name":"iPhone 15"`) {
 		t.Fatalf("Expected iPhone 15, got: %s", searchW.Body.String())
+	}
+
+	if !strings.Contains(searchW.Body.String(), `"name":"Wireless Headphones"`) {
+		t.Fatalf("Expected Wireless Headphones, got: %s", searchW.Body.String())
 	}
 
 	t.Log("Complex bool query test passed")
@@ -253,7 +260,8 @@ func TestCompatibility_RangeQuery(t *testing.T) {
 	}
 
 	// 应该返回2个结果（iPhone 15: 999.99, Wireless Headphones: 199.99）
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":2,"relation":"eq"}`) {
+	// 检查总数为2（不依赖JSON字段顺序）
+	if !strings.Contains(searchW.Body.String(), `"value":2`) || !strings.Contains(searchW.Body.String(), `"relation":"eq"`) {
 		t.Fatalf("Expected 2 results, got: %s", searchW.Body.String())
 	}
 
@@ -284,7 +292,8 @@ func TestCompatibility_SortAndPagination(t *testing.T) {
 	}
 
 	// 应该返回5个总结果，但只显示前3个
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":5,"relation":"eq"}`) {
+	// 检查总数为5（不依赖JSON字段顺序）
+	if !strings.Contains(searchW.Body.String(), `"value":5`) || !strings.Contains(searchW.Body.String(), `"relation":"eq"`) {
 		t.Fatalf("Expected 5 total results, got: %s", searchW.Body.String())
 	}
 
@@ -453,7 +462,8 @@ func TestCompatibility_ComplexScenario(t *testing.T) {
 	}
 
 	// 应该返回1个结果（The Art of Programming）
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":1,"relation":"eq"}`) {
+	// 检查总数为1（不依赖JSON字段顺序）
+	if !strings.Contains(searchW.Body.String(), `"value":1`) || !strings.Contains(searchW.Body.String(), `"relation":"eq"`) {
 		t.Fatalf("Expected 1 result, got: %s", searchW.Body.String())
 	}
 

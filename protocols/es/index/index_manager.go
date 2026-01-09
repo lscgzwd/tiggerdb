@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	bleve "github.com/lscgzwd/tiggerdb"
 	"github.com/lscgzwd/tiggerdb/directory"
@@ -98,9 +99,25 @@ func (im *IndexManager) GetIndex(indexName string) (bleve.Index, error) {
 	}
 
 	// 打开已存在的索引
-	idx, err := bleve.Open(storePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open index [%s] at path %s: %w", indexName, storePath, err)
+	// 添加重试机制，处理Windows文件锁问题
+	var idx bleve.Index
+	maxRetries := 3
+	retryDelay := 200 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		idx, err = bleve.Open(storePath)
+		if err == nil {
+			break
+		}
+
+		// 如果是最后一次尝试，直接返回错误
+		if i == maxRetries-1 {
+			return nil, fmt.Errorf("failed to open index [%s] at path %s after %d retries: %w", indexName, storePath, maxRetries, err)
+		}
+
+		// 等待文件锁释放后重试（Windows文件锁释放需要时间）
+		time.Sleep(retryDelay)
+		retryDelay *= 2 // 指数退避
 	}
 
 	// 缓存索引实例

@@ -19,6 +19,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/lscgzwd/tiggerdb/geo"
 	"github.com/lscgzwd/tiggerdb/search"
 	index "github.com/blevesearch/bleve_index_api"
 )

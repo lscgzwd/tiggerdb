@@ -157,6 +157,7 @@ func TestNestedMappingValidator_ValidateMapping(t *testing.T) {
 	// 有效的映射
 	validMapping := mapping.NewNestedFieldMapping()
 	validMapping.Properties["user"] = map[string]interface{}{
+		"type": "nested", // 添加type字段
 		"properties": map[string]interface{}{
 			"name": map[string]interface{}{
 				"type": "text",

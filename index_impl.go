@@ -557,6 +557,7 @@ func (i *indexImpl) preSearch(ctx context.Context, req *SearchRequest, reader in
 	var fts search.FieldTermSynonymMap
 	var count uint64
 	var fieldCardinality map[string]int
+	var termDocCounts map[string]map[string]uint64
 	if !isMatchNoneQuery(req.Query) {
 		if synMap, ok := i.m.(mapping.SynonymMapping); ok {
 			if synReader, ok := reader.(index.ThesaurusReader); ok {
@@ -586,6 +587,12 @@ func (i *indexImpl) preSearch(ctx context.Context, req *SearchRequest, reader in
 					}
 				}
 			}
+
+			// 收集每个词的文档频率，用于 GlobalScoring 正确计算 IDF
+			termDocCounts, err = query.ExtractTermDocCounts(ctx, i.m, reader, req.Query, nil)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -599,6 +606,7 @@ func (i *indexImpl) preSearch(ctx context.Context, req *SearchRequest, reader in
 		BM25Stats: &search.BM25Stats{
 			DocCount:         float64(count),
 			FieldCardinality: fieldCardinality,
+			TermDocCounts:    termDocCounts,
 		},
 	}, nil
 }

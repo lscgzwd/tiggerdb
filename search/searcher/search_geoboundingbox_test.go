@@ -19,12 +19,13 @@ import (
 	"reflect"
 	"testing"
 
+	index "github.com/blevesearch/bleve_index_api"
 	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/geo"
 	"github.com/lscgzwd/tiggerdb/index/upsidedown"
 	"github.com/lscgzwd/tiggerdb/index/upsidedown/store/gtreap"
 	"github.com/lscgzwd/tiggerdb/numeric"
 	"github.com/lscgzwd/tiggerdb/search"
-	index "github.com/blevesearch/bleve_index_api"
 )
 
 func TestGeoBoundingBox(t *testing.T) {

@@ -157,13 +157,14 @@ func TestArabicAnalyzer(t *testing.T) {
 		},
 		// presentation form normalization
 		{
-			input: []byte("ﺍﻟﺴﻼ�?),
+			// 原始字符串使用阿拉伯语“السلام”（带前缀和变体形式），规范化后应为“سلام”
+			input: []byte("ﺍﻟﺴﻼم"),
 			output: analysis.TokenStream{
 				&analysis.Token{
 					Term:     []byte("سلام"),
 					Position: 1,
 					Start:    0,
-					End:      15,
+					End:      14,
 				},
 			},
 		},

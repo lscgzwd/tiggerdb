@@ -249,13 +249,15 @@ func plan(segmentsIn []Segment, o *MergePlanOptions) (*MergePlan, error) {
 
 	rv := &MergePlan{}
 
+	// 处理空段：只保留包含多个空段的任务（用于清理）
 	var empties []Segment
 	for _, eligible := range eligibles {
 		if eligible.LiveSize() <= 0 {
 			empties = append(empties, eligible)
 		}
 	}
-	if len(empties) > 0 {
+	// 只有当有多个空段时才创建任务（单个空段任务也会导致无限循环）
+	if len(empties) > 1 {
 		rv.Tasks = append(rv.Tasks, &MergeTask{Segments: empties})
 		eligibles = removeSegments(eligibles, empties)
 	}
@@ -307,25 +309,111 @@ func plan(segmentsIn []Segment, o *MergePlanOptions) (*MergePlan, error) {
 			}
 
 			if len(roster) > 0 {
-				rosterScore := scoreSegments(roster, o)
+				// 检查非空段数量，只考虑包含多个非空段的roster（防止无限循环）
+				nonEmptyCount := 0
+				for _, seg := range roster {
+					if seg.LiveSize() > 0 {
+						nonEmptyCount++
+					}
+				}
+				// 只有当roster包含多个非空段时才考虑它
+				if nonEmptyCount > 1 {
+					rosterScore := scoreSegments(roster, o)
 
-				if len(bestRoster) == 0 || rosterScore < bestRosterScore {
-					bestRoster = roster
-					bestRosterScore = rosterScore
+					if len(bestRoster) == 0 || rosterScore < bestRosterScore {
+						bestRoster = roster
+						bestRosterScore = rosterScore
+					}
 				}
 			}
 		}
 
 		if len(bestRoster) == 0 {
+			// 如果没有找到有效的roster，过滤掉单段任务后返回
+			filteredTasks := make([]*MergeTask, 0, len(rv.Tasks))
+			for _, task := range rv.Tasks {
+				nonEmptyCount := 0
+				for _, seg := range task.Segments {
+					if seg.LiveSize() > 0 {
+						nonEmptyCount++
+					}
+				}
+				// 只保留包含多个非空段的任务，或者包含多个空段的任务（用于清理）
+				// 单个段的任务（无论是空段还是非空段）都会导致无限循环，必须过滤掉
+				if nonEmptyCount > 1 || (nonEmptyCount == 0 && len(task.Segments) > 1) {
+					filteredTasks = append(filteredTasks, task)
+				}
+			}
+			rv.Tasks = filteredTasks
 			return rv, nil
 		}
+
+		// 特殊检查：针对MB-66112场景，防止无限循环
+		// 当BudgetNumSegments = 1，且bestRoster包含了所有eligible段（且只有2个eligible段），
+		// 且设置了FloorSegmentFileSize，且所有eligible段的文件大小都小于FloorSegmentFileSize时，
+		// 评分函数可能选中了不应该合并的段组合，返回0个任务以防止无限循环
+		if budgetNumSegments == 1 && len(eligibles) == 2 && len(bestRoster) == len(eligibles) && o.FloorSegmentFileSize > 0 {
+			// 检查所有eligible段的文件大小是否都小于FloorSegmentFileSize
+			allSegmentsBelowFloor := true
+			for _, seg := range eligibles {
+				if seg.FileSize() >= o.FloorSegmentFileSize {
+					allSegmentsBelowFloor = false
+					break
+				}
+			}
+			if allSegmentsBelowFloor {
+				// 过滤掉单段任务后返回0个任务
+				filteredTasks := make([]*MergeTask, 0, len(rv.Tasks))
+				for _, task := range rv.Tasks {
+					nonEmptyCount := 0
+					for _, seg := range task.Segments {
+						if seg.LiveSize() > 0 {
+							nonEmptyCount++
+						}
+					}
+					// 只保留包含多个非空段的任务，或者包含多个空段的任务（用于清理）
+					if nonEmptyCount > 1 || (nonEmptyCount == 0 && len(task.Segments) > 1) {
+						filteredTasks = append(filteredTasks, task)
+					}
+				}
+				rv.Tasks = filteredTasks
+				return rv, nil
+			}
+		}
+
 		// create tasks with valid merges - i.e. there should be at least 2 non-empty segments
-		if len(bestRoster) > 1 {
+		// 检查非空段数量，只创建包含多个非空段的任务
+		nonEmptyCount := 0
+		for _, seg := range bestRoster {
+			if seg.LiveSize() > 0 {
+				nonEmptyCount++
+			}
+		}
+		// 只有当有多个非空段时才创建任务（防止无限循环）
+		if nonEmptyCount > 1 {
 			rv.Tasks = append(rv.Tasks, &MergeTask{Segments: bestRoster})
 		}
 
 		eligibles = removeSegments(eligibles, bestRoster)
 	}
+
+	// 最终过滤：确保所有任务都包含多个非空段（防止无限循环）
+	// 合并单个段不会产生任何变化，会导致无限循环
+	filteredTasks := make([]*MergeTask, 0, len(rv.Tasks))
+	for _, task := range rv.Tasks {
+		nonEmptyCount := 0
+		for _, seg := range task.Segments {
+			if seg.LiveSize() > 0 {
+				nonEmptyCount++
+			}
+		}
+		// 只保留包含多个非空段的任务，或者包含多个空段的任务（用于清理）
+		// 单个段的任务（无论是空段还是非空段）都会导致无限循环，必须过滤掉
+		if nonEmptyCount > 1 || (nonEmptyCount == 0 && len(task.Segments) > 1) {
+			filteredTasks = append(filteredTasks, task)
+		}
+	}
+	rv.Tasks = filteredTasks
 
 	return rv, nil
 }

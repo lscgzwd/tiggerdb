@@ -167,7 +167,8 @@ func (nmc *NestedMappingConverter) flattenProperties(properties map[string]inter
 
 		// 检查是否为嵌套类型
 		if fieldType, ok := fieldMap["type"].(string); ok && fieldType == "nested" {
-			// 嵌套类型，递归处理
+			// 嵌套类型，先添加嵌套字段本身，然后递归处理properties
+			flattened[fullPath] = fieldDef
 			if nestedProps, ok := fieldMap["properties"].(map[string]interface{}); ok {
 				if err := nmc.flattenProperties(nestedProps, fullPath, flattened); err != nil {
 					return err

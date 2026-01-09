@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	index "github.com/blevesearch/bleve_index_api"
 	"github.com/lscgzwd/tiggerdb/analysis"
 	"github.com/lscgzwd/tiggerdb/analysis/analyzer/custom"
 	"github.com/lscgzwd/tiggerdb/analysis/analyzer/keyword"
@@ -50,6 +51,7 @@ import (
 	"github.com/lscgzwd/tiggerdb/analysis/tokenizer/single"
 	"github.com/lscgzwd/tiggerdb/analysis/tokenizer/whitespace"
 	"github.com/lscgzwd/tiggerdb/document"
+	"github.com/lscgzwd/tiggerdb/geo"
 	"github.com/lscgzwd/tiggerdb/index/scorch"
 	"github.com/lscgzwd/tiggerdb/index/upsidedown"
 	"github.com/lscgzwd/tiggerdb/mapping"
@@ -57,7 +59,6 @@ import (
 	"github.com/lscgzwd/tiggerdb/search/highlight/highlighter/ansi"
 	"github.com/lscgzwd/tiggerdb/search/highlight/highlighter/html"
 	"github.com/lscgzwd/tiggerdb/search/query"
-	index "github.com/blevesearch/bleve_index_api"
 )
 
 func TestSortedFacetedQuery(t *testing.T) {

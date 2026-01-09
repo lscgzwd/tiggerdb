@@ -50,6 +50,29 @@ func (c *ES2MySQLConverter) ConvertMapping(indexName string, esMapping map[strin
 	}
 
 	tableMetadata.Schema = schema
+
+	// 添加默认的时间戳列
+	if tableMetadata.Schema == nil {
+		tableMetadata.Schema = &metadata.TableSchema{}
+	}
+	if tableMetadata.Schema.Columns == nil {
+		tableMetadata.Schema.Columns = []*metadata.TableColumn{}
+	}
+
+	// 添加 created_at 和 updated_at 列
+	tableMetadata.Schema.Columns = append(tableMetadata.Schema.Columns,
+		&metadata.TableColumn{
+			Name:     "created_at",
+			Type:     "DATETIME",
+			Nullable: true,
+		},
+		&metadata.TableColumn{
+			Name:     "updated_at",
+			Type:     "DATETIME",
+			Nullable: true,
+		},
+	)
+
 	return tableMetadata, nil
 }
 
@@ -104,32 +127,38 @@ func (c *ES2MySQLConverter) convertESFieldToColumn(fieldName string, fieldDef in
 		return nil, fmt.Errorf("field type must be a string")
 	}
 
-	// 根据ES类型转换为MySQL类型
+	// 根据ES类型转换为MySQL类型（使用小写）
 	switch typeStr {
 	case "text", "keyword":
-		column.Type = "VARCHAR"
+		column.Type = "varchar"
 		column.Length = 255 // 默认长度
 	case "long":
-		column.Type = "BIGINT"
+		column.Type = "bigint"
 	case "integer":
-		column.Type = "INT"
+		column.Type = "int"
 	case "short":
-		column.Type = "SMALLINT"
+		column.Type = "smallint"
 	case "byte":
-		column.Type = "TINYINT"
+		column.Type = "tinyint"
 	case "double":
-		column.Type = "DOUBLE"
+		column.Type = "double"
 	case "float":
-		column.Type = "FLOAT"
+		column.Type = "float"
 	case "boolean":
-		column.Type = "TINYINT"
+		column.Type = "tinyint"
 		column.Length = 1
 	case "date":
-		column.Type = "DATETIME"
+		column.Type = "datetime"
 	case "binary":
-		column.Type = "BLOB"
+		column.Type = "blob"
+	case "object":
+		column.Type = "json"
+	case "nested":
+		column.Type = "json"
+	case "geo_point", "geo_shape":
+		column.Type = "json"
 	default:
-		column.Type = "VARCHAR"
+		column.Type = "varchar"
 		column.Length = 255
 	}
 
@@ -172,9 +201,74 @@ func (c *ES2MySQLConverter) convertESQueryToSQL(query map[string]interface{}, pa
 		return "1=1", []interface{}{}, nil
 	}
 
-	// 这里应该实现完整的ES查询到SQL的转换
-	// 暂时返回简单的实现
+	// 处理 match 查询
+	if match, ok := query["match"]; ok {
+		return c.convertMatchQuery(match)
+	}
+
+	// 处理 bool 查询
+	if boolQuery, ok := query["bool"]; ok {
+		if boolMap, ok := boolQuery.(map[string]interface{}); ok {
+			return c.convertBoolQuery(boolMap)
+		}
+	}
+
+	// 处理 range 查询
+	if rangeQuery, ok := query["range"]; ok {
+		if rangeMap, ok := rangeQuery.(map[string]interface{}); ok {
+			return c.convertRangeQueryToSQL(rangeMap)
+		}
+	}
+
+	// 默认返回
 	return "1=1", []interface{}{}, nil
+}
+
+// convertMatchQuery 转换 match 查询
+func (c *ES2MySQLConverter) convertMatchQuery(match interface{}) (string, []interface{}, error) {
+	matchMap, ok := match.(map[string]interface{})
+	if !ok {
+		return "1=1", []interface{}{}, nil
+	}
+
+	var conditions []string
+	var params []interface{}
+
+	for field, value := range matchMap {
+		conditions = append(conditions, fmt.Sprintf("%s LIKE ?", field))
+		params = append(params, value)
+	}
+
+	if len(conditions) == 0 {
+		return "1=1", []interface{}{}, nil
+	}
+
+	return strings.Join(conditions, " AND "), params, nil
+}
+
+// convertRangeQueryToSQL 转换范围查询为SQL
+func (c *ES2MySQLConverter) convertRangeQueryToSQL(rangeMap map[string]interface{}) (string, []interface{}, error) {
+	var conditions []string
+	var params []interface{}
+
+	for field, rangeDef := range rangeMap {
+		if rangeDefMap, ok := rangeDef.(map[string]interface{}); ok {
+			if min, ok := rangeDefMap["gte"]; ok {
+				conditions = append(conditions, fmt.Sprintf("%s >= ?", field))
+				params = append(params, min)
+			}
+			if max, ok := rangeDefMap["lte"]; ok {
+				conditions = append(conditions, fmt.Sprintf("%s <= ?", field))
+				params = append(params, max)
+			}
+		}
+	}
+
+	if len(conditions) == 0 {
+		return "1=1", []interface{}{}, nil
+	}
+
+	return strings.Join(conditions, " AND "), params, nil
 }
 
 // convertRangeQuery 转换范围查询

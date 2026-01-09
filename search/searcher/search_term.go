@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
 
 	"github.com/lscgzwd/tiggerdb/search"
 	"github.com/lscgzwd/tiggerdb/search/scorer"
@@ -143,7 +144,25 @@ func newTermSearcherFromReader(ctx context.Context, indexReader index.IndexReade
 			return nil, err
 		}
 	}
-	scorer := scorer.NewTermQueryScorer(term, field, boost, count, reader.Count(), avgDocLength, options)
+
+	// 获取 docTerm（包含该词的文档数）
+	// 在 GlobalScoring 场景下，优先使用全局的 docTerm
+	docTerm := reader.Count()
+	if ctx != nil {
+		if bm25Stats, ok := ctx.Value(search.BM25StatsKey).(*search.BM25Stats); ok {
+			if bm25Stats.TermDocCounts != nil {
+				if fieldTerms, fieldOk := bm25Stats.TermDocCounts[field]; fieldOk {
+					// 使用小写的 term 作为 key，因为 ExtractTermDocCounts 使用小写
+					termStr := strings.ToLower(string(term))
+					if globalDocTerm, termOk := fieldTerms[termStr]; termOk {
+						docTerm = globalDocTerm
+					}
+				}
+			}
+		}
+	}
+
+	scorer := scorer.NewTermQueryScorer(term, field, boost, count, docTerm, avgDocLength, options)
 	return &TermSearcher{
 		indexReader: indexReader,
 		reader:      reader,

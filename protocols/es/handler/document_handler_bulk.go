@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/lscgzwd/tiggerdb/logger"
@@ -63,55 +64,54 @@ func (h *DocumentHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// P2-3: 流式解析Bulk JSON（不先读取整个body到内存，支持超大文件）
-	// 性能优化：使用bufio.NewReader + json.Decoder组合，实现高效的流式JSON解析
+	// 性能优化：使用bufio.NewReader + ReadString组合，实现高效的流式JSON解析
 	// 优势：
 	// 1. 避免将整个body读取到内存（支持超大文件，如500MB+）
-	// 2. 使用json.Decoder解析每一行，减少内存分配和字符串转换开销
-	// 3. 比json.Unmarshal([]byte(line))更高效，因为Decoder可以复用缓冲区
+	// 2. 使用ReadString逐行读取，然后json.Unmarshal解析，避免json.Decoder的阻塞问题
+	// 3. 对于NDJSON格式，这种方式更可靠，不会因为不完整的JSON对象而阻塞
 	reader := bufio.NewReader(r.Body)
 	defer r.Body.Close()
-	decoder := json.NewDecoder(reader)
 
 	// 解析批量操作
 	bulkItems := make([]BulkRequest, 0)
 	lineNum := 0
 
 	for {
-		// 使用json.Decoder解析每一行JSON
+		// 使用ReadLine逐行读取，然后json.Unmarshal解析
 		// 注意：ES Bulk API使用NDJSON格式，每行是独立的JSON对象
-		// 性能优化：使用json.Decoder比ReadString + json.Unmarshal更高效，因为：
-		// 1. Decoder可以复用内部缓冲区，减少内存分配
-		// 2. 自动跳过空白字符，无需手动TrimSpace
-		// 3. 直接解析到目标结构，减少中间字符串转换
-		var jsonLine map[string]interface{}
-		err := decoder.Decode(&jsonLine)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			// 检查是否是JSON语法错误（可能是空行或格式错误）
-			if syntaxErr, ok := err.(*json.SyntaxError); ok {
-				// JSON语法错误，可能是空行或格式错误
-				// 对于NDJSON格式，尝试跳过当前行并继续解析下一行
-				// 读取并丢弃当前行的剩余部分（直到换行符）
-				if syntaxErr.Offset > 0 {
-					// 尝试读取到换行符
-					_, readErr := reader.ReadString('\n')
-					if readErr != nil && readErr != io.EOF {
-						logger.Error("Failed to skip invalid JSON line %d: %v", lineNum, readErr)
-						common.HandleError(w, common.NewBadRequestError(fmt.Sprintf("failed to parse JSON line %d: %v", lineNum, err)))
-						return
-					}
-				}
-				lineNum++
-				continue
-			}
-			logger.Error("Failed to parse JSON line %d: %v", lineNum, err)
-			common.HandleError(w, common.NewBadRequestError(fmt.Sprintf("failed to parse JSON line %d: %v", lineNum, err)))
+		// 这种方式避免了json.Decoder在遇到不完整JSON对象时可能阻塞的问题
+		// ReadLine返回的line不包含换行符，更可靠
+		lineBytes, isPrefix, readErr := reader.ReadLine()
+		isEOF := readErr == io.EOF
+		if readErr != nil && !isEOF {
+			logger.Error("Failed to read bulk request line %d: %v", lineNum, readErr)
+			common.HandleError(w, common.NewBadRequestError("failed to read request: "+readErr.Error()))
 			return
 		}
 
+		// 如果isPrefix为true，说明行太长，需要继续读取（这种情况在Bulk API中很少见）
+		if isPrefix {
+			logger.Warn("Line %d is too long, truncating", lineNum)
+		}
+
+		line := strings.TrimSpace(string(lineBytes))
+		if line == "" {
+			// 空行，跳过
+			if isEOF {
+				break
+			}
+			continue
+		}
+
 		lineNum++
+
+		// 解析JSON行
+		var jsonLine map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &jsonLine); err != nil {
+			logger.Error("Failed to parse JSON line %d: %v, line content: %q", lineNum, err, line)
+			common.HandleError(w, common.NewBadRequestError(fmt.Sprintf("invalid JSON at line %d: %v", lineNum, err)))
+			return
+		}
 
 		// 跳过空对象
 		if len(jsonLine) == 0 {
@@ -173,6 +173,11 @@ func (h *DocumentHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		}
+
+		// 如果是EOF，处理完这一行后退出循环
+		if isEOF {
+			break
 		}
 	}
 
@@ -374,6 +379,15 @@ func (h *DocumentHandler) executeBulkOperationsBatch(idx bleve.Index, indexName 
 
 	// 执行batch（如果有操作）
 	if len(batchOps) > 0 {
+		// 在batch执行前检查文档是否存在（用于确定status）
+		docExistsMap := make(map[string]bool)
+		for _, op := range batchOps {
+			if op.index && op.item.ID != "" {
+				existingDoc, _ := idx.Document(op.item.ID)
+				docExistsMap[op.item.ID] = existingDoc != nil
+			}
+		}
+
 		if err := idx.Batch(batch); err != nil {
 			// batch执行失败，回退到单个处理
 			for _, op := range batchOps {
@@ -393,8 +407,8 @@ func (h *DocumentHandler) executeBulkOperationsBatch(idx bleve.Index, indexName 
 					var versionInfo *DocumentVersion
 					if op.item.Action == "update" {
 						// update操作：检查文档是否存在，决定是创建还是更新
-						existingDoc, _ := idx.Document(op.item.ID)
-						if existingDoc != nil {
+						docExists := docExistsMap[op.item.ID]
+						if docExists {
 							// 文档存在，递增版本
 							versionInfo = h.versionMgr.IncrementVersion(indexName, op.item.ID)
 							result = "updated"
@@ -407,8 +421,8 @@ func (h *DocumentHandler) executeBulkOperationsBatch(idx bleve.Index, indexName 
 						}
 					} else {
 						// create/index操作：检查文档是否存在
-						existingDoc, _ := idx.Document(op.item.ID)
-						if existingDoc != nil {
+						docExists := docExistsMap[op.item.ID]
+						if docExists {
 							// 文档存在，递增版本
 							versionInfo = h.versionMgr.IncrementVersion(indexName, op.item.ID)
 							result = "updated"

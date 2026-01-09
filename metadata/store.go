@@ -390,6 +390,16 @@ func (e *MetadataNotFoundError) Error() string {
 	return e.ResourceType + " metadata not found: " + e.ResourceName
 }
 
+// UnsupportedOperationError 不支持的操作错误
+type UnsupportedOperationError struct {
+	Operation string
+	Reason    string
+}
+
+func (e *UnsupportedOperationError) Error() string {
+	return "unsupported operation: " + e.Operation + " - " + e.Reason
+}
+
 // VersionConflictError 版本冲突错误
 type VersionConflictError struct {
 	ResourceType   string

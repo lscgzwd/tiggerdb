@@ -453,7 +453,8 @@ func TestDocCountAccuracy(t *testing.T) {
 			{
 				name: "TechCorp brand",
 				query: func() query.Query {
-					q := query.NewTermQuery("TechCorp")
+					// brand字段被lowercase处理，所以使用小写版本
+					q := query.NewTermQuery("techcorp")
 					q.SetField("brand")
 					return q
 				}(),

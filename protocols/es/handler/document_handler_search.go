@@ -163,6 +163,30 @@ func (h *DocumentHandler) Search(w http.ResponseWriter, r *http.Request) {
 		if searchReq.Size == 0 {
 			searchReq.Size = 10 // 默认10条
 		}
+		// 解析 q 参数（查询字符串格式，如 q=name:apple）
+		if qParam := r.URL.Query().Get("q"); qParam != "" {
+			// 解析查询字符串格式：field:value
+			// 支持简单格式：field:value
+			if strings.Contains(qParam, ":") {
+				parts := strings.SplitN(qParam, ":", 2)
+				if len(parts) == 2 {
+					field := strings.TrimSpace(parts[0])
+					value := strings.TrimSpace(parts[1])
+					// 构建 term 查询
+					searchReq.Query = map[string]interface{}{
+						"term": map[string]interface{}{
+							field: value,
+						},
+					}
+				}
+			} else {
+				// 如果没有冒号，使用 match_all 或 match 查询
+				// ES 默认行为：如果没有指定字段，对所有字段进行 match 查询
+				searchReq.Query = map[string]interface{}{
+					"match_all": map[string]interface{}{},
+				}
+			}
+		}
 	}
 
 	// 执行搜索
@@ -575,14 +599,40 @@ func (h *DocumentHandler) executeSearchInternal(idx bleve.Index, indexName strin
 
 			if hasMultiSourceComposite {
 				// 多字段 composite 聚合需要遍历所有文档
-				// 获取所有匹配的文档
-				allDocs, err := h.fetchAllDocsForCompositeAgg(idx, bleveReq.Query, compositeAggInfo)
+				// 根据文档数量选择批量处理或流式处理
+				const streamingThreshold = 50000 // 超过5万条使用流式处理
+
+				// 先快速估算匹配文档数
+				countReq := bleve.NewSearchRequest(bleveReq.Query)
+				countReq.Size = 0
+				countResult, err := idx.Search(countReq)
 				if err != nil {
-					logger.Warn("Failed to fetch docs for composite aggregation: %v", err)
+					logger.Warn("Failed to count documents for composite aggregation: %v", err)
 				} else {
-					compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, compositeAggInfo.Aggregations)
-					for k, v := range compositeAggs {
-						aggs[k] = v
+					totalDocs := int(countResult.Total)
+
+					if totalDocs > streamingThreshold {
+						// 大数据集：使用流式处理（内存安全）
+						logger.Info("Using streaming aggregation for large dataset (%d docs)", totalDocs)
+						compositeAggs, err := h.buildCompositeAggregationsStreaming(idx, bleveReq.Query, compositeAggInfo)
+						if err != nil {
+							logger.Warn("Failed to build streaming composite aggregation: %v", err)
+						} else {
+							for k, v := range compositeAggs {
+								aggs[k] = v
+							}
+						}
+					} else {
+						// 小数据集：使用批量处理（更快）
+						allDocs, err := h.fetchAllDocsForCompositeAgg(idx, bleveReq.Query, compositeAggInfo)
+						if err != nil {
+							logger.Warn("Failed to fetch docs for composite aggregation: %v", err)
+						} else {
+							compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, compositeAggInfo.Aggregations)
+							for k, v := range compositeAggs {
+								aggs[k] = v
+							}
+						}
 					}
 				}
 			} else {
@@ -1107,11 +1157,30 @@ func (h *DocumentHandler) buildFilterAggregations(filterInfo *FilterAggregationI
 						}
 
 						if hasMultiSourceComposite {
-							allDocs, err := h.fetchAllDocsForCompositeAgg(idx, combinedQuery, parsedSubAggs.CompositeInfo)
+							// 根据文档数量选择批量处理或流式处理
+							const streamingThreshold = 50000
+							countReq := bleve.NewSearchRequest(combinedQuery)
+							countReq.Size = 0
+							countResult, err := idx.Search(countReq)
 							if err == nil {
-								compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, parsedSubAggs.CompositeInfo.Aggregations)
-								for k, v := range compositeAggs {
-									subAggs[k] = v
+								totalDocs := int(countResult.Total)
+								if totalDocs > streamingThreshold {
+									// 大数据集：使用流式处理
+									compositeAggs, err := h.buildCompositeAggregationsStreaming(idx, combinedQuery, parsedSubAggs.CompositeInfo)
+									if err == nil {
+										for k, v := range compositeAggs {
+											subAggs[k] = v
+										}
+									}
+								} else {
+									// 小数据集：使用批量处理
+									allDocs, err := h.fetchAllDocsForCompositeAgg(idx, combinedQuery, parsedSubAggs.CompositeInfo)
+									if err == nil {
+										compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, parsedSubAggs.CompositeInfo.Aggregations)
+										for k, v := range compositeAggs {
+											subAggs[k] = v
+										}
+									}
 								}
 							}
 						} else {
@@ -1384,11 +1453,30 @@ func (h *DocumentHandler) buildNestedFieldAggregations(nestedFieldInfo *NestedFi
 						}
 
 						if hasMultiSourceComposite {
-							allDocs, err := h.fetchAllDocsForCompositeAgg(idx, combinedQuery, parsedSubAggs.CompositeInfo)
+							// 根据文档数量选择批量处理或流式处理
+							const streamingThreshold = 50000
+							countReq := bleve.NewSearchRequest(combinedQuery)
+							countReq.Size = 0
+							countResult, err := idx.Search(countReq)
 							if err == nil {
-								compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, parsedSubAggs.CompositeInfo.Aggregations)
-								for k, v := range compositeAggs {
-									subAggs[k] = v
+								totalDocs := int(countResult.Total)
+								if totalDocs > streamingThreshold {
+									// 大数据集：使用流式处理
+									compositeAggs, err := h.buildCompositeAggregationsStreaming(idx, combinedQuery, parsedSubAggs.CompositeInfo)
+									if err == nil {
+										for k, v := range compositeAggs {
+											subAggs[k] = v
+										}
+									}
+								} else {
+									// 小数据集：使用批量处理
+									allDocs, err := h.fetchAllDocsForCompositeAgg(idx, combinedQuery, parsedSubAggs.CompositeInfo)
+									if err == nil {
+										compositeAggs := h.buildCompositeAggregationsFromDocs(allDocs, parsedSubAggs.CompositeInfo.Aggregations)
+										for k, v := range compositeAggs {
+											subAggs[k] = v
+										}
+									}
 								}
 							}
 						} else {
@@ -1454,7 +1542,230 @@ func getNestedFieldValue(doc map[string]interface{}, fieldPath string) interface
 	return current
 }
 
+// buildCompositeAggregationsStreaming 流式处理composite聚合（内存安全，支持大数据集）
+// 分批处理文档，直接聚合，不存储所有文档到内存
+func (h *DocumentHandler) buildCompositeAggregationsStreaming(
+	idx bleve.Index,
+	query query.Query,
+	compositeAggInfo *CompositeAggregationInfo,
+) (map[string]interface{}, error) {
+	// 收集所有需要的字段
+	fieldsNeeded := make(map[string]bool)
+	fieldsList := make([]string, 0)
+	for _, cfg := range compositeAggInfo.Aggregations {
+		for _, source := range cfg.Sources {
+			field := source.Terms.Field
+			if !fieldsNeeded[field] {
+				fieldsNeeded[field] = true
+				fieldsList = append(fieldsList, field)
+			}
+		}
+	}
+
+	// 流式处理配置
+	const batchSize = 10000          // 每批处理1万条
+	const maxBatches = 1000          // 最多处理1000批（1000万条，理论上无限制）
+	const streamingThreshold = 50000 // 超过5万条使用流式处理
+
+	// 先快速估算匹配文档数
+	countReq := bleve.NewSearchRequest(query)
+	countReq.Size = 0
+	countResult, err := idx.Search(countReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count documents: %w", err)
+	}
+
+	totalDocs := int(countResult.Total)
+
+	// 如果总数为0，直接返回空结果
+	if totalDocs == 0 {
+		logger.Debug("buildCompositeAggregationsStreaming: no documents to process")
+		aggs := make(map[string]interface{})
+		for aggName := range compositeAggInfo.Aggregations {
+			aggs[aggName] = map[string]interface{}{
+				"buckets": []interface{}{},
+			}
+		}
+		return aggs, nil
+	}
+
+	logger.Info("buildCompositeAggregationsStreaming: processing %d documents in batches of %d", totalDocs, batchSize)
+
+	// 为每个聚合创建组合计数map（不存储文档，只存储聚合结果）
+	aggregationResults := make(map[string]map[string]*CompositeKey)
+
+	// 初始化每个聚合的计数map
+	for aggName := range compositeAggInfo.Aggregations {
+		aggregationResults[aggName] = make(map[string]*CompositeKey)
+	}
+
+	// 分批处理文档
+	from := 0
+	batchNum := 0
+	lastHitCount := 0 // 记录上一批的结果数量，用于检测是否卡住
+	for batchNum < maxBatches {
+		searchReq := bleve.NewSearchRequest(query)
+		searchReq.From = from
+		searchReq.Size = batchSize
+		searchReq.Fields = fieldsList
+
+		result, err := idx.Search(searchReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to search batch %d: %w", batchNum, err)
+		}
+
+		// 如果没有结果，说明已经处理完所有文档
+		if len(result.Hits) == 0 {
+			logger.Debug("buildCompositeAggregationsStreaming: no more documents at batch %d (from=%d)", batchNum, from)
+			break
+		}
+
+		// 安全检查：如果from已经超过总数，也应该停止
+		// 注意：totalDocs 可能不准确（可能增加），所以这个检查只是辅助
+		if totalDocs > 0 && from >= totalDocs {
+			logger.Debug("buildCompositeAggregationsStreaming: reached total documents at batch %d (from=%d, total=%d)", batchNum, from, totalDocs)
+			break
+		}
+
+		// 防止死循环：如果连续两批返回相同数量的结果，检查是否真的在处理新数据
+		if batchNum > 0 && len(result.Hits) == lastHitCount && len(result.Hits) == batchSize {
+			// 如果结果数量等于batchSize，说明可能还有更多数据
+			// 但如果from已经很大，可能是查询有问题
+			if totalDocs > 0 && from > totalDocs*2 {
+				logger.Warn("buildCompositeAggregationsStreaming: from (%d) exceeds 2x totalDocs (%d), possible infinite loop, breaking", from, totalDocs)
+				break
+			}
+			// 如果from已经超过一个很大的值（比如1000万），也应该停止
+			if from > 10000000 {
+				logger.Warn("buildCompositeAggregationsStreaming: from (%d) exceeds safety limit (10M), breaking to prevent infinite loop", from)
+				break
+			}
+		}
+		lastHitCount = len(result.Hits)
+
+		// 流式处理：直接聚合，不存储文档
+		for _, hit := range result.Hits {
+			if hit.Fields == nil {
+				continue
+			}
+
+			// 为每个聚合处理这个文档
+			for aggName, compositeAgg := range compositeAggInfo.Aggregations {
+				combinationCounts := aggregationResults[aggName]
+
+				// 提取组合键
+				key := make(map[string]interface{})
+				for _, source := range compositeAgg.Sources {
+					fieldName := source.Terms.Field
+					// 尝试直接从hit.Fields获取
+					val := hit.Fields[fieldName]
+					// 如果是嵌套字段（包含点号），需要特殊处理
+					if val == nil && strings.Contains(fieldName, ".") {
+						// 构建一个临时文档map用于嵌套字段查找
+						tempDoc := make(map[string]interface{})
+						for k, v := range hit.Fields {
+							tempDoc[k] = v
+						}
+						val = getNestedFieldValue(tempDoc, fieldName)
+					}
+					if val == nil && !source.Terms.MissingBucket {
+						key = nil
+						break
+					}
+					key[source.Name] = val
+				}
+
+				if key == nil {
+					continue
+				}
+
+				// 生成组合键的字符串表示
+				ck := &CompositeKey{Values: key, Count: 1}
+				keyStr := ck.String(compositeAgg.Sources)
+
+				// 直接聚合到map中
+				if existing, exists := combinationCounts[keyStr]; exists {
+					existing.Count++
+				} else {
+					combinationCounts[keyStr] = ck
+				}
+			}
+		}
+
+		// 如果这批结果少于batchSize，说明已经处理完所有文档
+		if len(result.Hits) < batchSize {
+			break
+		}
+
+		from += batchSize
+		batchNum++
+
+		// 每10批记录一次进度
+		if batchNum%10 == 0 {
+			logger.Debug("buildCompositeAggregationsStreaming: processed %d batches (%d docs)", batchNum, from)
+		}
+	}
+
+	logger.Info("buildCompositeAggregationsStreaming: completed processing %d batches (%d docs)", batchNum+1, from)
+
+	// 构建最终聚合结果
+	aggs := make(map[string]interface{})
+	for aggName, compositeAgg := range compositeAggInfo.Aggregations {
+		combinationCounts := aggregationResults[aggName]
+
+		// 转换为切片并排序
+		keys := make([]CompositeKey, 0, len(combinationCounts))
+		for _, ck := range combinationCounts {
+			keys = append(keys, *ck)
+		}
+		SortCompositeKeys(keys, compositeAgg.Sources)
+
+		// 应用 after 过滤（分页）
+		if compositeAgg.AfterKey != nil {
+			filteredKeys := make([]CompositeKey, 0)
+			for _, ck := range keys {
+				if CompareCompositeKeys(ck.Values, compositeAgg.AfterKey, compositeAgg.Sources) > 0 {
+					filteredKeys = append(filteredKeys, ck)
+				}
+			}
+			keys = filteredKeys
+		}
+
+		// 应用 size 限制
+		if len(keys) > compositeAgg.Size {
+			keys = keys[:compositeAgg.Size]
+		}
+
+		// 构建 buckets
+		buckets := make([]map[string]interface{}, 0, len(keys))
+		for _, ck := range keys {
+			buckets = append(buckets, map[string]interface{}{
+				"key":       ck.Values,
+				"doc_count": ck.Count,
+			})
+		}
+
+		// 构建 after_key（最后一个 bucket 的 key）
+		var afterKey map[string]interface{}
+		if len(keys) > 0 && len(keys) == compositeAgg.Size {
+			afterKey = keys[len(keys)-1].Values
+		}
+
+		result := map[string]interface{}{
+			"buckets": buckets,
+		}
+		if afterKey != nil {
+			result["after_key"] = afterKey
+		}
+
+		aggs[aggName] = result
+	}
+
+	return aggs, nil
+}
+
 // fetchAllDocsForCompositeAgg 获取所有匹配的文档用于 composite 聚合计算
+// ⚠️ 注意：此方法会将所有文档加载到内存，大数据集请使用 buildCompositeAggregationsStreaming
 func (h *DocumentHandler) fetchAllDocsForCompositeAgg(
 	idx bleve.Index,
 	query query.Query,
@@ -1480,7 +1791,35 @@ func (h *DocumentHandler) fetchAllDocsForCompositeAgg(
 	// 2. 字段数据已经在hit.Fields中，类型已转换好
 	// 3. 代码更简洁，不需要手动管理IndexReader
 	// 4. 避免了循环分页带来的多次搜索开销
-	const maxDocs = 1000000 // 最多处理100万文档
+	//
+	// ⚠️ 内存安全：降低默认限制从100万到10万，避免OOM风险
+	// 估算：10万条文档 × 500字节/条 ≈ 50MB内存
+	// 如需处理更多文档，建议使用流式处理（见 MEMORY_OPTIMIZATION_PROPOSAL.md）
+	const maxDocs = 100000  // 最多处理10万文档（降低以降低内存风险）
+	const maxMemoryMB = 500 // 最大内存限制500MB（估算值）
+
+	// 先快速估算匹配文档数
+	countReq := bleve.NewSearchRequest(query)
+	countReq.Size = 0 // 只获取总数，不返回文档
+	countResult, err := idx.Search(countReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count documents: %w", err)
+	}
+
+	totalDocs := int(countResult.Total)
+	if totalDocs > maxDocs {
+		logger.Warn("fetchAllDocsForCompositeAgg: document count (%d) exceeds max limit (%d), will process first %d documents only. Consider using streaming aggregation for large datasets.", totalDocs, maxDocs, maxDocs)
+	}
+
+	// 估算内存占用（每条文档约500字节）
+	estimatedMemoryMB := (maxDocs * 500) / (1024 * 1024)
+	if estimatedMemoryMB > maxMemoryMB {
+		// 如果估算内存超过限制，进一步降低文档数
+		adjustedMaxDocs := (maxMemoryMB * 1024 * 1024) / 500
+		logger.Warn("fetchAllDocsForCompositeAgg: estimated memory (%dMB) exceeds limit (%dMB), reducing max docs to %d", estimatedMemoryMB, maxMemoryMB, adjustedMaxDocs)
+		// 注意：这里不修改maxDocs，因为已经设置了合理的默认值
+	}
+
 	var allDocs []map[string]interface{}
 
 	// 一次性搜索所有匹配的文档（最多maxDocs条），并直接返回需要的字段
@@ -1492,11 +1831,6 @@ func (h *DocumentHandler) fetchAllDocsForCompositeAgg(
 	result, err := idx.Search(searchReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
-	}
-
-	totalDocs := int(result.Total)
-	if totalDocs > maxDocs {
-		logger.Warn("fetchAllDocsForCompositeAgg: document count (%d) exceeds max limit (%d), processed first %d documents", totalDocs, maxDocs, len(result.Hits))
 	}
 
 	// 预分配容量以提高性能
@@ -1527,7 +1861,13 @@ func (h *DocumentHandler) fetchAllDocsForCompositeAgg(
 		}
 	}
 
-	logger.Debug("fetchAllDocsForCompositeAgg: fetched %d documents with fields in one search (using Bleve Fields mechanism, total=%d)", len(allDocs), totalDocs)
+	// 内存监控：记录实际使用的内存
+	actualMemoryMB := (len(allDocs) * 500) / (1024 * 1024)
+	if actualMemoryMB > maxMemoryMB/2 {
+		logger.Warn("fetchAllDocsForCompositeAgg: high memory usage detected (%dMB for %d docs). Consider reducing query scope or using streaming aggregation.", actualMemoryMB, len(allDocs))
+	}
+
+	logger.Debug("fetchAllDocsForCompositeAgg: fetched %d documents with fields in one search (using Bleve Fields mechanism, total=%d, estimated memory=%dMB)", len(allDocs), totalDocs, actualMemoryMB)
 
 	return allDocs, nil
 }

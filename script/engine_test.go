@@ -265,8 +265,15 @@ func TestEngineExecuteUpdate(t *testing.T) {
 				t.Errorf("Execute() error = %v", err)
 				return
 			}
-			if ctx.Source[tt.wantField] != tt.wantValue {
-				t.Errorf("Execute() %s = %v, want %v", tt.wantField, ctx.Source[tt.wantField], tt.wantValue)
+			// 处理浮点数比较
+			got := ctx.Source[tt.wantField]
+			if wantFloat, ok := tt.wantValue.(float64); ok {
+				gotFloat := toFloat64(got)
+				if math.Abs(gotFloat-wantFloat) > 0.0001 {
+					t.Errorf("Execute() %s = %v, want %v", tt.wantField, got, tt.wantValue)
+				}
+			} else if got != tt.wantValue {
+				t.Errorf("Execute() %s = %v, want %v", tt.wantField, got, tt.wantValue)
 			}
 		})
 	}

@@ -111,13 +111,23 @@ func TestIndexLifecycle_CompleteFlow(t *testing.T) {
 	}
 
 	// 验证响应包含索引信息
+	// GET /{index} 返回格式：{"index_name": {"aliases": {}, "mappings": {...}, "settings": {...}}}
 	var indexInfo map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &indexInfo); err != nil {
 		t.Fatalf("Failed to parse index response: %v", err)
 	}
 
-	if acknowledged, ok := indexInfo["acknowledged"].(bool); !ok || !acknowledged {
-		t.Fatalf("Index response should have acknowledged=true")
+	// 验证响应包含索引名称作为键
+	if indexData, ok := indexInfo[indexName].(map[string]interface{}); !ok {
+		t.Fatalf("Index response should contain index name as key")
+	} else {
+		// 验证包含必要的字段
+		if _, ok := indexData["mappings"]; !ok {
+			t.Fatalf("Index response should contain mappings")
+		}
+		if _, ok := indexData["settings"]; !ok {
+			t.Fatalf("Index response should contain settings")
+		}
 	}
 
 	// 3. 列出索引
@@ -470,8 +480,18 @@ func TestIndexOperations_Concurrency(t *testing.T) {
 	// 应该有15个索引（5个goroutine * 3个索引）
 	responseBody := w.Body.String()
 	indexCount := 0
-	for _, line := range strings.Split(responseBody, "\n") {
-		if strings.TrimSpace(line) != "" {
+	lines := strings.Split(responseBody, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// 跳过表头行（第一行通常是 "index\tstatus" 或类似格式）
+		if i == 0 && (strings.HasPrefix(line, "index") || strings.Contains(line, "status")) {
+			continue
+		}
+		// 只计算以 concurrent_index_ 开头的索引（排除其他可能的索引）
+		if strings.HasPrefix(line, "concurrent_index_") {
 			indexCount++
 		}
 	}

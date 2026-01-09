@@ -31,10 +31,19 @@ func TestServerConfigValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "invalid port too low",
+			name: "port 0 (auto-assign) is valid",
 			config: func() *ServerConfig {
 				cfg := DefaultServerConfig()
 				cfg.Port = 0
+				return cfg
+			}(),
+			wantErr: false, // 端口 0 用于自动分配，是有效的
+		},
+		{
+			name: "invalid port too low (negative)",
+			config: func() *ServerConfig {
+				cfg := DefaultServerConfig()
+				cfg.Port = -1
 				return cfg
 			}(),
 			wantErr: true,

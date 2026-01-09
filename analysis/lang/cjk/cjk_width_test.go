@@ -60,7 +60,8 @@ func TestCJKWidthFilter(t *testing.T) {
 		{
 			input: analysis.TokenStream{
 				&analysis.Token{
-					Term: []byte("ｳﾞｨｯ�?),
+					// 半角片假名“ｳﾞｨｯﾂ”，应被规范化为全角“ヴィッツ”
+					Term: []byte("ｳﾞｨｯﾂ"),
 				},
 			},
 			output: analysis.TokenStream{
@@ -72,7 +73,20 @@ func TestCJKWidthFilter(t *testing.T) {
 		{
 			input: analysis.TokenStream{
 				&analysis.Token{
-					Term: []byte("ﾊﾟﾅｿﾆｯ�?),
+					// 半角片假名“ﾊﾟﾅｿﾆｯｸ”，应被规范化为全角“パナソニック”
+					Term: []byte("ﾊﾟﾅｿﾆｯｸ"),
+				},
+			},
+			output: analysis.TokenStream{
+				&analysis.Token{
+					Term: []byte("パナソニック"),
+				},
+			},
+		},
+		{
+			input: analysis.TokenStream{
+				&analysis.Token{
+					Term: []byte("ﾊﾟﾅｿﾆｯク"),
 				},
 			},
 			output: analysis.TokenStream{

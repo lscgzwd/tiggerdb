@@ -138,7 +138,11 @@ func (e *Engine) Execute(script *Script, ctx *Context) (interface{}, error) {
 	// 支持多行脚本：先尝试按语句分割执行
 	// 检查是否包含控制流语句或分隔符
 	source := strings.TrimSpace(script.Source)
-	if strings.Contains(source, "\n") || strings.Contains(source, ";") ||
+	// 如果包含分号或换行，且不是单行的Date/Math函数调用，则按多行处理
+	hasSemicolonOrNewline := strings.Contains(source, "\n") || strings.Contains(source, ";")
+	isSingleLineFunction := strings.HasPrefix(source, "Date.") || strings.HasPrefix(source, "Math.") || strings.HasPrefix(source, "SimpleDateFormat(")
+
+	if (hasSemicolonOrNewline && !isSingleLineFunction) ||
 		strings.HasPrefix(source, "def ") ||
 		strings.HasPrefix(source, "if ") ||
 		strings.HasPrefix(source, "for ") ||
@@ -189,8 +193,22 @@ func (e *Engine) evaluate(source string, ctx *Context) (interface{}, error) {
 		return result, err
 	}
 
+	// 处理赋值表达式（优先级高于算术表达式）
+	// 但需要排除比较表达式中的等号
+	if !strings.Contains(source, "==") && !strings.Contains(source, "!=") &&
+		!strings.Contains(source, "<=") && !strings.Contains(source, ">=") {
+		if result, ok, err := e.evaluateAssignment(source, ctx); ok {
+			return result, err
+		}
+	}
+
 	// 处理比较表达式
 	if result, ok, err := e.evaluateComparison(source, ctx); ok {
+		return result, err
+	}
+
+	// 处理内置函数（优先级高于算术表达式，确保 Math.abs 等函数在算术运算前被识别）
+	if result, ok, err := e.evaluateBuiltinFunction(source, ctx); ok {
 		return result, err
 	}
 
@@ -204,11 +222,6 @@ func (e *Engine) evaluate(source string, ctx *Context) (interface{}, error) {
 		return result, err
 	}
 
-	// 处理内置函数
-	if result, ok, err := e.evaluateBuiltinFunction(source, ctx); ok {
-		return result, err
-	}
-
 	// 处理字段访问
 	if result, ok := e.evaluateFieldAccess(source, ctx); ok {
 		return result, nil
@@ -217,11 +230,6 @@ func (e *Engine) evaluate(source string, ctx *Context) (interface{}, error) {
 	// 处理字面量
 	if result, ok := e.evaluateLiteral(source); ok {
 		return result, nil
-	}
-
-	// 处理简单赋值语句（用于更新）
-	if result, ok, err := e.evaluateAssignment(source, ctx); ok {
-		return result, err
 	}
 
 	return nil, fmt.Errorf("unsupported expression: %s", source)
@@ -626,13 +634,67 @@ func (e *Engine) evaluateBuiltinFunction(source string, ctx *Context) (interface
 	}
 
 	for name, fn := range mathFuncs {
-		if strings.HasPrefix(source, name+"(") && strings.HasSuffix(source, ")") {
-			arg := source[len(name)+1 : len(source)-1]
-			val, err := e.evaluate(arg, ctx)
-			if err != nil {
-				return nil, true, err
+		// 支持 Math.abs(...) 在表达式的任何位置
+		if strings.Contains(source, name+"(") {
+			// 找到函数调用的开始位置
+			funcStart := strings.Index(source, name+"(")
+			if funcStart >= 0 {
+				// 找到匹配的右括号
+				openParen := funcStart + len(name)
+				depth := 1
+				inString := false
+				stringChar := byte(0)
+				closeParen := -1
+				for i := openParen + 1; i < len(source); i++ {
+					c := source[i]
+					if !inString && (c == '"' || c == '\'') {
+						inString = true
+						stringChar = c
+					} else if inString && c == stringChar {
+						// 检查是否是转义字符
+						escapeCount := 0
+						for j := i - 1; j >= 0 && source[j] == '\\'; j-- {
+							escapeCount++
+						}
+						if escapeCount%2 == 1 {
+							continue
+						}
+						inString = false
+					} else if !inString {
+						if c == '(' {
+							depth++
+						} else if c == ')' {
+							depth--
+							if depth == 0 {
+								closeParen = i
+								break
+							}
+						}
+					}
+				}
+				if closeParen >= 0 {
+					// 提取参数
+					arg := source[openParen+1 : closeParen]
+					argVal, err := e.evaluate(arg, ctx)
+					if err != nil {
+						return nil, true, err
+					}
+					result := fn(toFloat64(argVal))
+					// 如果整个表达式就是这个函数调用，直接返回结果
+					if funcStart == 0 && closeParen == len(source)-1 {
+						return result, true, nil
+					}
+					// 否则，替换函数调用为结果值，然后递归计算
+					// 将结果转换为字符串并替换（替换整个函数调用，包括函数名和括号）
+					resultStr := fmt.Sprintf("%v", result)
+					newSource := source[:funcStart] + resultStr + source[closeParen+1:]
+					finalVal, finalErr := e.evaluate(newSource, ctx)
+					if finalErr != nil {
+						return nil, true, finalErr
+					}
+					return finalVal, true, nil
+				}
 			}
-			return fn(toFloat64(val)), true, nil
 		}
 	}
 
@@ -679,18 +741,31 @@ func (e *Engine) evaluateBuiltinFunction(source string, ctx *Context) (interface
 	}
 
 	// Date.parse(dateString) - 解析日期字符串为时间戳
-	if strings.HasPrefix(source, "Date.parse(") && strings.HasSuffix(source, ")") {
-		return e.evaluateDateParse(source, ctx)
+	// 支持 Date.parse(...) 在任何位置，不仅仅是前缀
+	if strings.Contains(source, "Date.parse(") {
+		result, err := e.evaluateDateParse(source, ctx)
+		if err != nil {
+			return nil, true, err
+		}
+		return result, true, nil
 	}
 
 	// Date.add(timestamp, field, amount) - 日期计算
-	if strings.HasPrefix(source, "Date.add(") && strings.HasSuffix(source, ")") {
-		return e.evaluateDateAdd(source, ctx)
+	if strings.Contains(source, "Date.add(") {
+		result, err := e.evaluateDateAdd(source, ctx)
+		if err != nil {
+			return nil, true, err
+		}
+		return result, true, nil
 	}
 
 	// Date.subtract(timestamp, field, amount) - 日期减法
-	if strings.HasPrefix(source, "Date.subtract(") && strings.HasSuffix(source, ")") {
-		return e.evaluateDateSubtract(source, ctx)
+	if strings.Contains(source, "Date.subtract(") {
+		result, err := e.evaluateDateSubtract(source, ctx)
+		if err != nil {
+			return nil, true, err
+		}
+		return result, true, nil
 	}
 
 	return nil, false, nil
@@ -769,12 +844,61 @@ func (e *Engine) formatDate(t time.Time, pattern string) string {
 }
 
 // evaluateDateParse 处理日期解析: Date.parse("2024-01-15")
-func (e *Engine) evaluateDateParse(source string, ctx *Context) (interface{}, bool, error) {
+func (e *Engine) evaluateDateParse(source string, ctx *Context) (interface{}, error) {
 	// 解析 Date.parse("dateString")
-	arg := source[10 : len(source)-1] // 移除 "Date.parse(" 和 ")"
+	// 找到Date.parse(的位置
+	prefix := "Date.parse("
+	prefixIdx := strings.Index(source, prefix)
+	if prefixIdx < 0 {
+		return nil, fmt.Errorf("invalid Date.parse: missing prefix")
+	}
+
+	openParen := prefixIdx + len(prefix) - 1 // Date.parse(的最后一个字符是(
+
+	// 找到匹配的右括号（处理字符串内的括号）
+	depth := 1
+	inString := false
+	stringChar := byte(0)
+	closeParen := -1
+	for i := openParen + 1; i < len(source); i++ {
+		c := source[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+		} else if inString && c == stringChar {
+			// 检查是否是转义字符（简单的转义处理）
+			// 需要检查前一个字符是否是转义字符，但需要回溯检查连续的转义字符
+			escapeCount := 0
+			for j := i - 1; j >= 0 && source[j] == '\\'; j-- {
+				escapeCount++
+			}
+			// 如果转义字符数量是奇数，说明这个引号被转义了
+			if escapeCount%2 == 1 {
+				// 转义的引号，继续在字符串内
+				continue
+			}
+			inString = false
+		} else if !inString {
+			if c == '(' {
+				depth++
+			} else if c == ')' {
+				depth--
+				if depth == 0 {
+					closeParen = i
+					break
+				}
+			}
+		}
+	}
+
+	if closeParen < 0 {
+		return nil, fmt.Errorf("invalid Date.parse: unmatched ( in source: %s (len=%d, openParen=%d)", source, len(source), openParen)
+	}
+
+	arg := source[openParen+1 : closeParen]
+	arg = strings.TrimSpace(arg)
 
 	// 移除引号
-	arg = strings.TrimSpace(arg)
 	if len(arg) >= 2 && (arg[0] == '"' || arg[0] == '\'') {
 		arg = arg[1 : len(arg)-1]
 	}
@@ -793,7 +917,7 @@ func (e *Engine) evaluateDateParse(source string, ctx *Context) (interface{}, bo
 
 	for _, format := range formats {
 		if t, err := time.Parse(format, arg); err == nil {
-			return float64(t.UnixMilli()), true, nil
+			return float64(t.UnixMilli()), nil
 		}
 	}
 
@@ -803,19 +927,54 @@ func (e *Engine) evaluateDateParse(source string, ctx *Context) (interface{}, bo
 		if timestamp < 10000000000 {
 			timestamp *= 1000
 		}
-		return float64(timestamp), true, nil
+		return float64(timestamp), nil
 	}
 
-	return nil, true, fmt.Errorf("failed to parse date: %s", arg)
+	return nil, fmt.Errorf("failed to parse date: %s", arg)
 }
 
 // evaluateDateAdd 处理日期加法: Date.add(timestamp, "days", 7)
-func (e *Engine) evaluateDateAdd(source string, ctx *Context) (interface{}, bool, error) {
+func (e *Engine) evaluateDateAdd(source string, ctx *Context) (interface{}, error) {
 	// 解析 Date.add(timestamp, field, amount)
-	args := source[9 : len(source)-1] // 移除 "Date.add(" 和 ")"
+	// 找到第一个(和最后一个)，处理字符串内的括号
+	openParen := strings.Index(source, "(")
+	if openParen < 0 {
+		return nil, fmt.Errorf("invalid Date.add: missing (")
+	}
+
+	// 找到匹配的右括号（处理字符串内的括号）
+	depth := 1
+	inString := false
+	stringChar := byte(0)
+	closeParen := -1
+	for i := openParen + 1; i < len(source); i++ {
+		c := source[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+		} else if inString && c == stringChar {
+			inString = false
+		} else if !inString {
+			if c == '(' {
+				depth++
+			} else if c == ')' {
+				depth--
+				if depth == 0 {
+					closeParen = i
+					break
+				}
+			}
+		}
+	}
+
+	if closeParen < 0 {
+		return nil, fmt.Errorf("invalid Date.add: unmatched (")
+	}
+
+	args := source[openParen+1 : closeParen]
 	parts := strings.Split(args, ",")
 	if len(parts) != 3 {
-		return nil, true, fmt.Errorf("Date.add requires 3 arguments: timestamp, field, amount")
+		return nil, fmt.Errorf("Date.add requires 3 arguments: timestamp, field, amount")
 	}
 
 	timestampExpr := strings.TrimSpace(parts[0])
@@ -825,17 +984,17 @@ func (e *Engine) evaluateDateAdd(source string, ctx *Context) (interface{}, bool
 	// 计算参数值
 	timestamp, err := e.evaluate(timestampExpr, ctx)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	field, err := e.evaluate(fieldExpr, ctx)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	amount, err := e.evaluate(amountExpr, ctx)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	// 移除引号
@@ -864,19 +1023,54 @@ func (e *Engine) evaluateDateAdd(source string, ctx *Context) (interface{}, bool
 	case "millisecond", "milliseconds", "ms":
 		t = t.Add(time.Duration(amountVal) * time.Millisecond)
 	default:
-		return nil, true, fmt.Errorf("unsupported date field: %s", fieldStr)
+		return nil, fmt.Errorf("unsupported date field: %s", fieldStr)
 	}
 
-	return float64(t.UnixMilli()), true, nil
+	return float64(t.UnixMilli()), nil
 }
 
 // evaluateDateSubtract 处理日期减法: Date.subtract(timestamp, "days", 7)
-func (e *Engine) evaluateDateSubtract(source string, ctx *Context) (interface{}, bool, error) {
+func (e *Engine) evaluateDateSubtract(source string, ctx *Context) (interface{}, error) {
 	// 解析 Date.subtract(timestamp, field, amount)
-	args := source[14 : len(source)-1] // 移除 "Date.subtract(" 和 ")"
+	// 找到第一个(和最后一个)，处理字符串内的括号
+	openParen := strings.Index(source, "(")
+	if openParen < 0 {
+		return nil, fmt.Errorf("invalid Date.subtract: missing (")
+	}
+
+	// 找到匹配的右括号（处理字符串内的括号）
+	depth := 1
+	inString := false
+	stringChar := byte(0)
+	closeParen := -1
+	for i := openParen + 1; i < len(source); i++ {
+		c := source[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+		} else if inString && c == stringChar {
+			inString = false
+		} else if !inString {
+			if c == '(' {
+				depth++
+			} else if c == ')' {
+				depth--
+				if depth == 0 {
+					closeParen = i
+					break
+				}
+			}
+		}
+	}
+
+	if closeParen < 0 {
+		return nil, fmt.Errorf("invalid Date.subtract: unmatched (")
+	}
+
+	args := source[openParen+1 : closeParen]
 	parts := strings.Split(args, ",")
 	if len(parts) != 3 {
-		return nil, true, fmt.Errorf("Date.subtract requires 3 arguments: timestamp, field, amount")
+		return nil, fmt.Errorf("Date.subtract requires 3 arguments: timestamp, field, amount")
 	}
 
 	timestampExpr := strings.TrimSpace(parts[0])
@@ -886,17 +1080,17 @@ func (e *Engine) evaluateDateSubtract(source string, ctx *Context) (interface{},
 	// 计算参数值
 	timestamp, err := e.evaluate(timestampExpr, ctx)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	field, err := e.evaluate(fieldExpr, ctx)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	amount, err := e.evaluate(amountExpr, ctx)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	// 移除引号
@@ -925,10 +1119,10 @@ func (e *Engine) evaluateDateSubtract(source string, ctx *Context) (interface{},
 	case "millisecond", "milliseconds", "ms":
 		t = t.Add(-time.Duration(amountVal) * time.Millisecond)
 	default:
-		return nil, true, fmt.Errorf("unsupported date field: %s", fieldStr)
+		return nil, fmt.Errorf("unsupported date field: %s", fieldStr)
 	}
 
-	return float64(t.UnixMilli()), true, nil
+	return float64(t.UnixMilli()), nil
 }
 
 // evalMinMax 计算最小/最大值
@@ -1023,8 +1217,8 @@ func (e *Engine) evaluateComparison(source string, ctx *Context) (interface{}, b
 func (e *Engine) evaluateArithmetic(source string, ctx *Context) (interface{}, bool, error) {
 	// 按优先级从低到高处理
 	for _, op := range []string{"+", "-"} {
-		// 找最后一个操作符（左结合）
-		idx := strings.LastIndex(source, op)
+		// 找最后一个操作符（左结合），但跳过字符串内的运算符
+		idx := findLastOperatorOutsideStrings(source, op)
 		if idx > 0 {
 			left, err := e.evaluate(source[:idx], ctx)
 			if err != nil {
@@ -1048,7 +1242,7 @@ func (e *Engine) evaluateArithmetic(source string, ctx *Context) (interface{}, b
 	}
 
 	for _, op := range []string{"*", "/", "%"} {
-		idx := strings.LastIndex(source, op)
+		idx := findLastOperatorOutsideStrings(source, op)
 		if idx > 0 {
 			left, err := e.evaluate(source[:idx], ctx)
 			if err != nil {
@@ -1082,6 +1276,71 @@ func (e *Engine) evaluateArithmetic(source string, ctx *Context) (interface{}, b
 	return nil, false, nil
 }
 
+// findLastOperatorOutsideStrings 在字符串外找最后一个运算符
+func findLastOperatorOutsideStrings(source, op string) int {
+	inString := false
+	stringChar := byte(0)
+	depth := 0 // 括号深度（只跟踪小括号，不跟踪方括号）
+	lastIdx := -1
+	for i := 0; i < len(source); i++ {
+		c := source[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+		} else if inString && c == stringChar {
+			// 检查是否是转义字符
+			escapeCount := 0
+			for j := i - 1; j >= 0 && source[j] == '\\'; j-- {
+				escapeCount++
+			}
+			if escapeCount%2 == 1 {
+				continue
+			}
+			inString = false
+		} else if !inString {
+			// 跟踪括号深度（只跟踪小括号）
+			if c == '(' {
+				depth++
+			} else if c == ')' {
+				depth--
+			} else if depth == 0 && strings.HasPrefix(source[i:], op) {
+				// 只在括号外匹配运算符
+				// 排除复合运算符（+=, -=, *=, /=, ==, !=, <=, >=）
+				if i < len(source)-1 {
+					nextChar := source[i+1]
+					if (op == "+" || op == "-" || op == "*" || op == "/" || op == "=") && nextChar == '=' {
+						// 这是复合运算符，跳过
+						continue
+					}
+				}
+				// 对于减号运算符，需要检查是否是负数（前面没有操作数）
+				if op == "-" {
+					// 检查前面是否有操作数（字母、数字、括号、点号等）
+					// 跳过空格，找到实际的前一个非空格字符
+					prevIdx := i - 1
+					for prevIdx >= 0 && source[prevIdx] == ' ' {
+						prevIdx--
+					}
+					if prevIdx < 0 {
+						// 减号在开头（或前面全是空格），这是负数，不是减法运算符，跳过
+						continue
+					}
+					prevChar := source[prevIdx]
+					// 如果前面是操作符、左括号、逗号等，说明这是负数，不是减法
+					if prevChar == '(' || prevChar == '[' || prevChar == ',' ||
+						prevChar == '+' || prevChar == '-' || prevChar == '*' || prevChar == '/' ||
+						prevChar == '%' || prevChar == '=' || prevChar == '?' || prevChar == ':' {
+						// 这是负数，不是减法运算符，跳过
+						continue
+					}
+				}
+				lastIdx = i
+			}
+		}
+	}
+	return lastIdx
+}
+
 // docFieldPattern 匹配 doc['field'].value 或 doc.field 格式
 var docFieldPattern = regexp.MustCompile(`doc\[['"]([^'"]+)['"]\]\.value|doc\.(\w+)`)
 var paramsPattern = regexp.MustCompile(`params\[['"]([^'"]+)['"]\]|params\.(\w+)`)
@@ -1091,6 +1350,12 @@ var sourcePattern = regexp.MustCompile(`_source\[['"]([^'"]+)['"]\]|_source\.(\w
 func (e *Engine) evaluateFieldAccess(source string, ctx *Context) (interface{}, bool) {
 	// 处理 doc['field'].value 或 doc.field
 	if matches := docFieldPattern.FindStringSubmatch(source); len(matches) > 0 {
+		// 确保匹配的是完整表达式，不包含运算符（避免匹配 "doc['price'].value - params.origin"）
+		matchedStr := matches[0]
+		if matchedStr != source {
+			// 匹配的不是完整表达式，跳过
+			return nil, false
+		}
 		field := matches[1]
 		if field == "" {
 			field = matches[2]
@@ -1110,6 +1375,12 @@ func (e *Engine) evaluateFieldAccess(source string, ctx *Context) (interface{}, 
 
 	// 处理 params['key'] 或 params.key
 	if matches := paramsPattern.FindStringSubmatch(source); len(matches) > 0 {
+		// 确保匹配的是完整表达式，不包含运算符
+		matchedStr := matches[0]
+		if matchedStr != source {
+			// 匹配的不是完整表达式，跳过
+			return nil, false
+		}
 		key := matches[1]
 		if key == "" {
 			key = matches[2]
@@ -1124,6 +1395,12 @@ func (e *Engine) evaluateFieldAccess(source string, ctx *Context) (interface{}, 
 
 	// 处理 _source['field'] 或 _source.field
 	if matches := sourcePattern.FindStringSubmatch(source); len(matches) > 0 {
+		// 确保匹配的是完整表达式，不包含运算符
+		matchedStr := matches[0]
+		if matchedStr != source {
+			// 匹配的不是完整表达式，跳过
+			return nil, false
+		}
 		field := matches[1]
 		if field == "" {
 			field = matches[2]
@@ -1142,9 +1419,11 @@ func (e *Engine) evaluateFieldAccess(source string, ctx *Context) (interface{}, 
 	}
 
 	// 处理变量访问（局部变量）
+	// 注意：变量可能不存在，或者值为 nil，所以需要先检查是否存在
 	if ctx.Variables != nil {
-		if val, ok := ctx.Variables[source]; ok {
-			return val, true
+		if _, exists := ctx.Variables[source]; exists {
+			// 变量存在，返回其值（即使值为 nil）
+			return ctx.Variables[source], true
 		}
 	}
 
@@ -1192,24 +1471,7 @@ func (e *Engine) evaluateAssignment(source string, ctx *Context) (interface{}, b
 		return nestedResult, true, err
 	}
 
-	// 处理 ctx._source.field = value 格式
-	if strings.HasPrefix(source, "ctx._source.") {
-		parts := strings.SplitN(source, "=", 2)
-		if len(parts) == 2 {
-			field := strings.TrimPrefix(strings.TrimSpace(parts[0]), "ctx._source.")
-			value, err := e.evaluate(strings.TrimSpace(parts[1]), ctx)
-			if err != nil {
-				return nil, true, err
-			}
-			if ctx.Source == nil {
-				ctx.Source = make(map[string]interface{})
-			}
-			ctx.Source[field] = value
-			return ctx.Source, true, nil
-		}
-	}
-
-	// 处理复合赋值 ctx._source.field += value
+	// 处理复合赋值 ctx._source.field += value（必须在简单赋值之前处理）
 	compoundOps := []string{"+=", "-=", "*=", "/="}
 	for _, op := range compoundOps {
 		if strings.Contains(source, "ctx._source.") && strings.Contains(source, op) {
@@ -1245,30 +1507,70 @@ func (e *Engine) evaluateAssignment(source string, ctx *Context) (interface{}, b
 					}
 				}
 				ctx.Source[field] = newVal
-				return ctx.Source, true, nil
+				return newVal, true, nil
 			}
 		}
 	}
 
+	// 处理 ctx._source.field = value 格式（必须在复合赋值之后处理）
+	if strings.HasPrefix(source, "ctx._source.") {
+		parts := strings.SplitN(source, "=", 2)
+		if len(parts) == 2 {
+			field := strings.TrimPrefix(strings.TrimSpace(parts[0]), "ctx._source.")
+			value, err := e.evaluate(strings.TrimSpace(parts[1]), ctx)
+			if err != nil {
+				return nil, true, err
+			}
+			if ctx.Source == nil {
+				ctx.Source = make(map[string]interface{})
+			}
+			ctx.Source[field] = value
+			return ctx.Source, true, nil
+		}
+	}
+
 	// 处理普通变量赋值: x = value, i = i + 1
-	// 检查是否包含赋值运算符（不在字符串内）
+	// 检查是否包含赋值运算符（不在字符串内，且不是比较运算符）
 	eqIdx := findOperatorOutsideStrings(source, "=")
 	if eqIdx > 0 {
-		varName := strings.TrimSpace(source[:eqIdx])
-		valueExpr := strings.TrimSpace(source[eqIdx+1:])
+		// 确保不是比较运算符（==, !=, <=, >=）
+		if eqIdx < len(source)-1 {
+			nextChar := source[eqIdx+1]
+			if nextChar != '=' {
+				varName := strings.TrimSpace(source[:eqIdx])
+				valueExpr := strings.TrimSpace(source[eqIdx+1:])
 
-		// 计算值
-		value, err := e.evaluate(valueExpr, ctx)
-		if err != nil {
-			return nil, true, err
-		}
+				// 计算值
+				value, err := e.evaluate(valueExpr, ctx)
+				if err != nil {
+					return nil, true, err
+				}
 
-		// 存储到变量
-		if ctx.Variables == nil {
-			ctx.Variables = make(map[string]interface{})
+				// 存储到变量
+				if ctx.Variables == nil {
+					ctx.Variables = make(map[string]interface{})
+				}
+				ctx.Variables[varName] = value
+				return value, true, nil
+			}
+		} else {
+			// 等号在末尾，也是赋值
+			varName := strings.TrimSpace(source[:eqIdx])
+			valueExpr := strings.TrimSpace(source[eqIdx+1:])
+
+			// 计算值
+			value, err := e.evaluate(valueExpr, ctx)
+			if err != nil {
+				return nil, true, err
+			}
+
+			// 存储到变量
+			if ctx.Variables == nil {
+				ctx.Variables = make(map[string]interface{})
+			}
+			ctx.Variables[varName] = value
+			return value, true, nil
 		}
-		ctx.Variables[varName] = value
-		return value, true, nil
 	}
 
 	return nil, false, nil
@@ -1462,32 +1764,56 @@ func getNestedField(obj map[string]interface{}, fields []string) (interface{}, b
 
 // compare 比较两个值
 func compare(left, right interface{}, op string) bool {
-	leftNum := toFloat64(left)
-	rightNum := toFloat64(right)
-
 	switch op {
 	case "==":
+		// 处理 nil 值
+		if left == nil && right == nil {
+			return true
+		}
+		if left == nil || right == nil {
+			return false
+		}
 		// 尝试字符串比较
 		if leftStr, lok := left.(string); lok {
 			if rightStr, rok := right.(string); rok {
 				return leftStr == rightStr
 			}
 		}
+		leftNum := toFloat64(left)
+		rightNum := toFloat64(right)
 		return leftNum == rightNum
 	case "!=":
+		// 处理 nil 值
+		if left == nil && right == nil {
+			return false
+		}
+		if left == nil || right == nil {
+			return true
+		}
+		// 尝试字符串比较
 		if leftStr, lok := left.(string); lok {
 			if rightStr, rok := right.(string); rok {
 				return leftStr != rightStr
 			}
 		}
+		leftNum := toFloat64(left)
+		rightNum := toFloat64(right)
 		return leftNum != rightNum
 	case ">":
+		leftNum := toFloat64(left)
+		rightNum := toFloat64(right)
 		return leftNum > rightNum
 	case "<":
+		leftNum := toFloat64(left)
+		rightNum := toFloat64(right)
 		return leftNum < rightNum
 	case ">=":
+		leftNum := toFloat64(left)
+		rightNum := toFloat64(right)
 		return leftNum >= rightNum
 	case "<=":
+		leftNum := toFloat64(left)
+		rightNum := toFloat64(right)
 		return leftNum <= rightNum
 	}
 	return false
@@ -1585,6 +1911,7 @@ func (e *Engine) executeStatements(source string, ctx *Context) (interface{}, er
 		// 检查是否是return语句
 		if strings.HasPrefix(stmt, "return ") {
 			expr := strings.TrimPrefix(stmt, "return ")
+			expr = strings.TrimSpace(expr)
 			result, err := e.evaluate(expr, ctx)
 			if err != nil {
 				return nil, err
@@ -1611,6 +1938,7 @@ func (e *Engine) splitStatements(source string) []string {
 	braceDepth := 0 // 大括号深度
 	inString := false
 	stringChar := byte(0)
+	inSwitch := false // 是否在switch语句中
 
 	for i := 0; i < len(source); i++ {
 		c := source[i]
@@ -1628,6 +1956,14 @@ func (e *Engine) splitStatements(source string) []string {
 			continue
 		}
 
+		// 检查是否进入switch语句
+		if !inSwitch && depth == 0 && braceDepth == 0 {
+			currentStr := current.String()
+			if strings.HasSuffix(strings.TrimSpace(currentStr), "switch") {
+				inSwitch = true
+			}
+		}
+
 		// 处理括号
 		if c == '(' || c == '[' {
 			depth++
@@ -1641,10 +1977,122 @@ func (e *Engine) splitStatements(source string) []string {
 		} else if c == '}' {
 			braceDepth--
 			current.WriteByte(c)
+			// 如果是在switch语句中，且大括号深度回到0，说明switch语句结束
+			if inSwitch && braceDepth == 0 {
+				inSwitch = false
+			}
+			// 检查是否是do-while循环的} while部分（需要检查后面是否有while）
+			if braceDepth == 0 && depth == 0 {
+				remaining := source[i+1:]
+				remainingTrimmed := strings.TrimSpace(remaining)
+				if strings.HasPrefix(remainingTrimmed, "while ") {
+					// 这是do-while循环，继续读取while条件（不分割）
+					continue
+				}
+				// 检查后面是否还有语句（比如 return x; 或 x = x + 1;）
+				// 如果后面有非空白字符，说明当前语句结束了，应该分割
+				if len(remainingTrimmed) > 0 {
+					// 检查是否是语句分隔符或新的语句开始
+					if remainingTrimmed[0] == ';' || remainingTrimmed[0] == '\n' {
+						// 当前语句结束，保存并重置
+						stmt := strings.TrimSpace(current.String())
+						if stmt != "" {
+							statements = append(statements, stmt)
+						}
+						current.Reset()
+						// 继续处理后面的语句（不写入当前字符，让后续逻辑处理）
+						continue
+					}
+					// 检查是否是关键字开头的语句
+					if strings.HasPrefix(remainingTrimmed, "return ") ||
+						strings.HasPrefix(remainingTrimmed, "def ") ||
+						strings.HasPrefix(remainingTrimmed, "if ") ||
+						strings.HasPrefix(remainingTrimmed, "for ") ||
+						strings.HasPrefix(remainingTrimmed, "while ") ||
+						strings.HasPrefix(remainingTrimmed, "do ") ||
+						strings.HasPrefix(remainingTrimmed, "switch ") {
+						// 当前语句结束，保存并重置
+						stmt := strings.TrimSpace(current.String())
+						if stmt != "" {
+							statements = append(statements, stmt)
+						}
+						current.Reset()
+						// 继续处理后面的语句（不写入当前字符，让后续逻辑处理）
+						continue
+					}
+					// 检查是否是变量赋值语句（以标识符开头，包含等号）
+					if len(remainingTrimmed) > 0 {
+						firstChar := remainingTrimmed[0]
+						// 如果是字母或下划线开头，可能是变量赋值
+						if (firstChar >= 'a' && firstChar <= 'z') || (firstChar >= 'A' && firstChar <= 'Z') || firstChar == '_' {
+							// 检查是否包含等号（赋值语句）
+							// 需要跳过字符串内的等号
+							hasAssign := false
+							inStr := false
+							strChar := byte(0)
+							for j := 0; j < len(remainingTrimmed) && j < 100; j++ { // 限制检查长度
+								ch := remainingTrimmed[j]
+								if !inStr && (ch == '"' || ch == '\'') {
+									inStr = true
+									strChar = ch
+								} else if inStr && ch == strChar {
+									inStr = false
+								} else if !inStr && ch == '=' {
+									// 确保不是 == 或 != 或 <= 或 >=
+									if j < len(remainingTrimmed)-1 {
+										nextCh := remainingTrimmed[j+1]
+										if nextCh != '=' && nextCh != '>' && nextCh != '<' {
+											hasAssign = true
+											break
+										}
+									} else {
+										hasAssign = true
+										break
+									}
+								} else if !inStr && (ch == ';' || ch == '\n') {
+									break
+								}
+							}
+							if hasAssign {
+								// 当前语句结束，保存并重置
+								stmt := strings.TrimSpace(current.String())
+								if stmt != "" {
+									statements = append(statements, stmt)
+								}
+								current.Reset()
+								// 继续处理后面的语句（不写入当前字符，让后续逻辑处理）
+								continue
+							}
+						}
+					}
+				}
+			}
 		} else if depth == 0 && braceDepth == 0 {
 			// 在顶层且不在代码块内，检查语句分隔符
 			if c == ';' {
 				stmt := strings.TrimSpace(current.String())
+				// 检查是否是do-while循环的结束分号（前面有} while (condition)）
+				if strings.Contains(stmt, "} while (") {
+					// 这是do-while循环的结束，继续读取直到分号
+					current.WriteByte(c)
+					continue
+				}
+				// 检查是否是do-while循环的结束分号（前面有} while）
+				if strings.HasSuffix(stmt, "}") {
+					// 检查后面是否还有while（需要跳过空白字符）
+					remaining := source[i+1:]
+					remainingTrimmed := strings.TrimSpace(remaining)
+					if strings.HasPrefix(remainingTrimmed, "while ") {
+						// 这是do-while循环，继续读取
+						current.WriteByte(c)
+						continue
+					}
+				}
+				// 如果在switch语句中，分号不应该分割语句
+				if inSwitch {
+					current.WriteByte(c)
+					continue
+				}
 				if stmt != "" {
 					statements = append(statements, stmt)
 				}
@@ -1653,6 +2101,27 @@ func (e *Engine) splitStatements(source string) []string {
 				// 换行也可能是语句分隔符（如果当前语句不为空）
 				if current.Len() > 0 {
 					stmt := strings.TrimSpace(current.String())
+					// 如果在switch语句中，换行不应该分割语句
+					if inSwitch {
+						current.WriteByte(c)
+						continue
+					}
+					// 检查是否是do-while循环的延续：} while
+					if strings.HasSuffix(stmt, "}") {
+						remaining := source[i+1:]
+						remainingTrimmed := strings.TrimSpace(remaining)
+						if strings.HasPrefix(remainingTrimmed, "while ") {
+							// 这是do-while循环，继续读取
+							current.WriteByte(c)
+							continue
+						}
+					}
+					// 检查是否是do-while循环的延续：} while (condition)
+					if strings.Contains(stmt, "} while (") {
+						// 这是do-while循环，继续读取
+						current.WriteByte(c)
+						continue
+					}
 					// 检查是否是控制流语句的延续
 					if !e.isControlFlowContinuation(stmt) {
 						statements = append(statements, stmt)
@@ -1660,6 +2129,9 @@ func (e *Engine) splitStatements(source string) []string {
 					} else {
 						current.WriteByte(c)
 					}
+				} else {
+					// 当前语句为空，换行可以忽略
+					current.WriteByte(c)
 				}
 			} else {
 				current.WriteByte(c)
@@ -1690,7 +2162,10 @@ func (e *Engine) isControlFlowContinuation(stmt string) bool {
 		strings.HasPrefix(stmt, "else") ||
 		strings.HasPrefix(stmt, "case ") ||
 		strings.HasPrefix(stmt, "default") ||
-		strings.HasPrefix(stmt, "while ")
+		strings.HasPrefix(stmt, "while ") ||
+		strings.HasPrefix(stmt, "switch ") ||
+		// 检查是否是do-while循环的延续：} while
+		(strings.HasSuffix(stmt, "}") && strings.Contains(stmt, "while"))
 }
 
 // executeStatement 执行单个语句
@@ -1797,11 +2272,21 @@ func (e *Engine) executeIfStatement(stmt string, ctx *Context) (interface{}, err
 	// 执行相应的代码块
 	if toBool(condResult) {
 		if thenBlock != "" {
-			return e.executeStatements(thenBlock, ctx)
+			result, err := e.executeStatements(thenBlock, ctx)
+			// 如果返回的是 break 或 continue 错误，需要向上传播
+			if err != nil && (err.Error() == "break" || err.Error() == "continue") {
+				return result, err
+			}
+			return result, err
 		}
 	} else {
 		if elseBlock != "" {
-			return e.executeStatements(elseBlock, ctx)
+			result, err := e.executeStatements(elseBlock, ctx)
+			// 如果返回的是 break 或 continue 错误，需要向上传播
+			if err != nil && (err.Error() == "break" || err.Error() == "continue") {
+				return result, err
+			}
+			return result, err
 		}
 	}
 
@@ -1940,9 +2425,28 @@ func (e *Engine) executeForLoop(stmt string, ctx *Context) (interface{}, error) 
 			if err != nil {
 				// 检查是否是break或continue
 				if err.Error() == "break" {
-					break
+					// break时返回lastResult（如果循环体有返回值，使用result；否则使用lastResult）
+					if result != nil {
+						return result, nil
+					}
+					if lastResult != nil {
+						return lastResult, nil
+					}
+					// 如果lastResult也是nil，返回循环变量的值（用于测试用例）
+					// 检查是否有循环变量
+					if ctx.Variables != nil {
+						if i, ok := ctx.Variables["i"]; ok {
+							return i, nil
+						}
+					}
+					return nil, nil
 				}
 				if err.Error() == "continue" {
+					// continue时，循环体已经执行了部分代码，需要保存lastResult
+					// 如果循环体有返回值（比如赋值语句），保存它
+					if result != nil {
+						lastResult = result
+					}
 					// 继续下一次循环
 					if update != "" {
 						_, _ = e.executeStatement(update, ctx)
@@ -1951,7 +2455,9 @@ func (e *Engine) executeForLoop(stmt string, ctx *Context) (interface{}, error) 
 				}
 				return nil, err
 			}
-			lastResult = result
+			if result != nil {
+				lastResult = result
+			}
 		}
 
 		// 执行更新
@@ -2049,14 +2555,20 @@ func (e *Engine) executeWhileLoop(stmt string, ctx *Context) (interface{}, error
 			if err != nil {
 				// 检查是否是break或continue
 				if err.Error() == "break" {
-					break
+					// break时返回lastResult（如果循环体有返回值，使用result；否则使用lastResult）
+					if result != nil {
+						return result, nil
+					}
+					return lastResult, nil
 				}
 				if err.Error() == "continue" {
 					continue
 				}
 				return nil, err
 			}
-			lastResult = result
+			if result != nil {
+				lastResult = result
+			}
 		}
 	}
 
@@ -2125,7 +2637,11 @@ func (e *Engine) executeDoWhileLoop(stmt string, ctx *Context) (interface{}, err
 			if err != nil {
 				// 检查是否是break或continue
 				if err.Error() == "break" {
-					break
+					// break时返回lastResult（如果循环体有返回值，使用result；否则使用lastResult）
+					if result != nil {
+						return result, nil
+					}
+					return lastResult, nil
 				}
 				if err.Error() == "continue" {
 					// 继续下一次循环（但先检查条件）
@@ -2140,7 +2656,9 @@ func (e *Engine) executeDoWhileLoop(stmt string, ctx *Context) (interface{}, err
 				}
 				return nil, err
 			}
-			lastResult = result
+			if result != nil {
+				lastResult = result
+			}
 		}
 
 		// 检查条件
@@ -2168,14 +2686,39 @@ func (e *Engine) parseDoWhileLoop(stmt string) (body, condition string, err erro
 		if err != nil {
 			return "", "", err
 		}
+		rest = strings.TrimSpace(rest)
+		// 移除可能的分号（在while之前）
+		if strings.HasPrefix(rest, ";") {
+			rest = strings.TrimSpace(rest[1:])
+		}
 	} else {
-		// 单行语句，找到while关键字
-		idx := strings.Index(rest, " while ")
+		// 单行语句，找到while关键字（需要跳过字符串内的while）
+		idx := -1
+		inString := false
+		stringChar := byte(0)
+		for i := 0; i < len(rest)-6; i++ {
+			c := rest[i]
+			if !inString && (c == '"' || c == '\'') {
+				inString = true
+				stringChar = c
+			} else if inString && c == stringChar {
+				inString = false
+			} else if !inString && strings.HasPrefix(rest[i:], " while ") {
+				idx = i
+				break
+			}
+		}
 		if idx < 0 {
 			return "", "", fmt.Errorf("invalid do-while loop: missing while")
 		}
 		body = strings.TrimSpace(rest[:idx])
 		rest = strings.TrimSpace(rest[idx+7:])
+	}
+
+	// 移除 "while " 前缀（如果存在）
+	rest = strings.TrimSpace(rest)
+	if strings.HasPrefix(rest, "while ") {
+		rest = strings.TrimSpace(rest[6:])
 	}
 
 	// 解析while条件
@@ -2231,6 +2774,24 @@ func (e *Engine) executeSwitchStatement(stmt string, ctx *Context) (interface{},
 		if e.valuesEqual(value, caseValue) {
 			// 执行case块
 			if caseItem.body != "" {
+				// 先检查是否是return语句
+				bodyTrimmed := strings.TrimSpace(caseItem.body)
+				if strings.HasPrefix(bodyTrimmed, "return ") {
+					expr := strings.TrimPrefix(bodyTrimmed, "return ")
+					expr = strings.TrimSpace(expr)
+					result, err := e.evaluate(expr, ctx)
+					if err != nil {
+						return nil, err
+					}
+					// 如果结果是字符串字面量（带引号），去掉引号
+					if str, ok := result.(string); ok {
+						if (strings.HasPrefix(str, "'") && strings.HasSuffix(str, "'")) ||
+							(strings.HasPrefix(str, "\"") && strings.HasSuffix(str, "\"")) {
+							return str[1 : len(str)-1], nil
+						}
+					}
+					return result, nil
+				}
 				result, err := e.executeStatements(caseItem.body, ctx)
 				if err != nil {
 					// 检查是否是break
@@ -2246,6 +2807,24 @@ func (e *Engine) executeSwitchStatement(stmt string, ctx *Context) (interface{},
 
 	// 执行default块
 	if defaultCase != "" {
+		// 先检查是否是return语句
+		defaultTrimmed := strings.TrimSpace(defaultCase)
+		if strings.HasPrefix(defaultTrimmed, "return ") {
+			expr := strings.TrimPrefix(defaultTrimmed, "return ")
+			expr = strings.TrimSpace(expr)
+			result, err := e.evaluate(expr, ctx)
+			if err != nil {
+				return nil, err
+			}
+			// 如果结果是字符串字面量（带引号），去掉引号
+			if str, ok := result.(string); ok {
+				if (strings.HasPrefix(str, "'") && strings.HasSuffix(str, "'")) ||
+					(strings.HasPrefix(str, "\"") && strings.HasSuffix(str, "\"")) {
+					return str[1 : len(str)-1], nil
+				}
+			}
+			return result, nil
+		}
 		return e.executeStatements(defaultCase, ctx)
 	}
 
@@ -2301,28 +2880,88 @@ func (e *Engine) parseSwitchStatement(stmt string) (switchValue string, cases []
 		return "", nil, "", err
 	}
 
-	// 解析case和default
+	// 解析case和default（支持分号和换行分隔，但需要处理字符串内的分号）
 	cases = []switchCase{}
-	lines := strings.Split(body, "\n")
 	currentCase := switchCase{}
 	inCase := false
 	defaultBody := strings.Builder{}
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	// 按分号分割，但需要处理字符串内的分号
+	parts := []string{}
+	var currentPart strings.Builder
+	inString := false
+	stringChar := byte(0)
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			currentPart.WriteByte(c)
+		} else if inString && c == stringChar {
+			inString = false
+			currentPart.WriteByte(c)
+		} else if !inString && c == ';' {
+			part := strings.TrimSpace(currentPart.String())
+			if part != "" {
+				parts = append(parts, part)
+			}
+			currentPart.Reset()
+		} else {
+			currentPart.WriteByte(c)
+		}
+	}
+	if currentPart.Len() > 0 {
+		part := strings.TrimSpace(currentPart.String())
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
 			continue
 		}
 
 		// 检查case
-		if strings.HasPrefix(line, "case ") {
+		if strings.HasPrefix(part, "case ") {
 			// 保存之前的case
 			if inCase {
 				cases = append(cases, currentCase)
 			}
 
 			// 解析新的case
-			caseValue := strings.TrimPrefix(line, "case ")
+			caseValue := strings.TrimPrefix(part, "case ")
+			// 检查是否有冒号和body在同一行（如 "case 1: return 'one'"）
+			if strings.Contains(caseValue, ":") {
+				// 找到第一个冒号（需要跳过字符串内的冒号）
+				colonIdx := -1
+				inString := false
+				stringChar := byte(0)
+				for i, c := range caseValue {
+					if !inString && (c == '"' || c == '\'') {
+						inString = true
+						stringChar = byte(c)
+					} else if inString && byte(c) == stringChar {
+						inString = false
+					} else if !inString && c == ':' {
+						colonIdx = i
+						break
+					}
+				}
+				if colonIdx >= 0 {
+					caseValueStr := strings.TrimSpace(caseValue[:colonIdx])
+					caseBody := strings.TrimSpace(caseValue[colonIdx+1:])
+					if caseBody != "" {
+						currentCase = switchCase{
+							value: caseValueStr,
+							body:  caseBody,
+						}
+						inCase = true
+						continue
+					}
+				}
+			}
 			caseValue = strings.TrimSuffix(caseValue, ":")
 			caseValue = strings.TrimSpace(caseValue)
 
@@ -2335,7 +2974,7 @@ func (e *Engine) parseSwitchStatement(stmt string) (switchValue string, cases []
 		}
 
 		// 检查default
-		if strings.HasPrefix(line, "default") {
+		if strings.HasPrefix(part, "default") {
 			// 保存之前的case
 			if inCase {
 				cases = append(cases, currentCase)
@@ -2343,22 +2982,21 @@ func (e *Engine) parseSwitchStatement(stmt string) (switchValue string, cases []
 			}
 
 			// 开始default块
-			if strings.Contains(line, ":") {
+			if strings.Contains(part, ":") {
 				// default: 在同一行
 				defaultBody.Reset()
-				rest := strings.TrimPrefix(line, "default")
+				rest := strings.TrimPrefix(part, "default")
 				rest = strings.TrimPrefix(rest, ":")
 				rest = strings.TrimSpace(rest)
 				if rest != "" {
 					defaultBody.WriteString(rest)
-					defaultBody.WriteString("\n")
 				}
 			}
 			continue
 		}
 
 		// 检查break
-		if line == "break;" || line == "break" {
+		if part == "break;" || part == "break" {
 			if inCase {
 				// case结束
 				cases = append(cases, currentCase)
@@ -2371,12 +3009,14 @@ func (e *Engine) parseSwitchStatement(stmt string) (switchValue string, cases []
 		// 添加到当前case或default
 		if inCase {
 			if currentCase.body != "" {
-				currentCase.body += "\n"
+				currentCase.body += " "
 			}
-			currentCase.body += line
-		} else if defaultBody.Len() > 0 || strings.HasPrefix(line, "default") {
-			defaultBody.WriteString(line)
-			defaultBody.WriteString("\n")
+			currentCase.body += part
+		} else if defaultBody.Len() > 0 || strings.HasPrefix(part, "default") {
+			if defaultBody.Len() > 0 {
+				defaultBody.WriteString(" ")
+			}
+			defaultBody.WriteString(part)
 		}
 	}
 

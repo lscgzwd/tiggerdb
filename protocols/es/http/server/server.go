@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,6 +41,7 @@ type Server struct {
 	started    bool
 	mu         sync.RWMutex
 	startTime  time.Time
+	listener   net.Listener // 用于端口 0 时获取实际端口
 }
 
 // NewServer 创建新的HTTP服务器
@@ -130,6 +132,25 @@ func (s *Server) Start() error {
 		}
 	}
 
+	// 如果端口为 0，使用 net.Listen 手动创建 listener 以获取实际端口
+	if s.config.Port == 0 {
+		listener, err := net.Listen("tcp", s.config.Address())
+		if err != nil {
+			return fmt.Errorf("failed to listen: %w", err)
+		}
+		s.listener = listener
+		// 获取实际端口并更新配置
+		addr := listener.Addr().(*net.TCPAddr)
+		s.config.Port = addr.Port
+		log.Printf("Starting TigerDB HTTP server on %s (auto-assigned port)", s.config.Address())
+		
+		// 启动服务器
+		if s.config.TLSEnable {
+			return s.httpServer.ServeTLS(listener, "", "")
+		}
+		return s.httpServer.Serve(listener)
+	}
+
 	log.Printf("Starting TigerDB HTTP server on %s", s.config.Address())
 
 	// 启动服务器
@@ -178,7 +199,12 @@ func (s *Server) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	return s.httpServer.Shutdown(ctx)
+	err := s.httpServer.Shutdown(ctx)
+	if s.listener != nil {
+		s.listener.Close()
+		s.listener = nil
+	}
+	return err
 }
 
 // IsRunning 检查服务器是否正在运行

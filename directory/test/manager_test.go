@@ -103,7 +103,8 @@ func TestDirectoryManager_CreateAndDeleteIndex(t *testing.T) {
 		t.Fatalf("Failed to delete index: %v", err)
 	}
 
-	// 验证索引不存�?	if manager.IndexExists(indexName) {
+	// 验证索引不存在
+	if manager.IndexExists(indexName) {
 		t.Fatal("Index should not exist after deletion")
 	}
 }
@@ -128,7 +129,8 @@ func TestDirectoryManager_IndexOperations_EdgeCases(t *testing.T) {
 		t.Fatal("Creating index with empty name should fail")
 	}
 
-	// 测试无效索引�?	invalidNames := []string{".hidden", "invalid.name", "invalid/name", "invalid name"}
+	// 测试无效索引名
+	invalidNames := []string{".hidden", "invalid.name", "invalid/name", "invalid name"}
 	for _, name := range invalidNames {
 		err = manager.CreateIndex(name)
 		if err == nil {
@@ -142,7 +144,8 @@ func TestDirectoryManager_IndexOperations_EdgeCases(t *testing.T) {
 		t.Fatal("Deleting nonexistent index should fail")
 	}
 
-	// 测试检查不存在的索�?	if manager.IndexExists("nonexistent") {
+	// 测试检查不存在的索引
+	if manager.IndexExists("nonexistent") {
 		t.Fatal("Nonexistent index should not exist")
 	}
 }
@@ -164,21 +167,25 @@ func TestDirectoryManager_CreateAndDeleteTable(t *testing.T) {
 	indexName := "test_index"
 	tableName := "test_table"
 
-	// 先创建索�?	err = manager.CreateIndex(indexName)
+	// 先创建索引
+	err = manager.CreateIndex(indexName)
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
 	}
 
-	// 测试创建�?	err = manager.CreateTable(indexName, tableName)
+	// 测试创建表
+	err = manager.CreateTable(indexName, tableName)
 	if err != nil {
 		t.Fatalf("Failed to create table: %v", err)
 	}
 
-	// 验证表存�?	if !manager.TableExists(indexName, tableName) {
+	// 验证表存在
+	if !manager.TableExists(indexName, tableName) {
 		t.Fatal("Table should exist after creation")
 	}
 
-	// 验证表路径存�?	tablePath := manager.GetTablePath(indexName, tableName)
+	// 验证表路径存在
+	tablePath := manager.GetTablePath(indexName, tableName)
 	if tablePath == "" {
 		t.Fatal("Table path should not be empty")
 	}
@@ -192,7 +199,8 @@ func TestDirectoryManager_CreateAndDeleteTable(t *testing.T) {
 		t.Fatal("Creating existing table should fail")
 	}
 
-	// 测试删除�?	err = manager.DeleteTable(indexName, tableName)
+	// 测试删除表
+	err = manager.DeleteTable(indexName, tableName)
 	if err != nil {
 		t.Fatalf("Failed to delete table: %v", err)
 	}
@@ -224,7 +232,8 @@ func TestDirectoryManager_TableOperations_EdgeCases(t *testing.T) {
 		t.Fatalf("Failed to create index: %v", err)
 	}
 
-	// 测试空表�?	err = manager.CreateTable(indexName, "")
+	// 测试空表名
+	err = manager.CreateTable(indexName, "")
 	if err == nil {
 		t.Fatal("Creating table with empty name should fail")
 	}
@@ -235,7 +244,7 @@ func TestDirectoryManager_TableOperations_EdgeCases(t *testing.T) {
 		t.Fatal("Creating table in nonexistent index should fail")
 	}
 
-	// 测试删除不存在的�?	err = manager.DeleteTable(indexName, "nonexistent")
+	// 测试删除不存在的�?	err = manager.DeleteTable(indexName, "nonexistent")
 	if err == nil {
 		t.Fatal("Deleting nonexistent table should fail")
 	}
@@ -260,7 +269,8 @@ func TestDirectoryManager_ListOperations(t *testing.T) {
 	}
 	defer manager.Cleanup()
 
-	// 测试列出空索引列�?	indices, err := manager.ListIndices()
+	// 测试列出空索引列表
+	indices, err := manager.ListIndices()
 	if err != nil {
 		t.Fatalf("Failed to list indices: %v", err)
 	}
@@ -268,7 +278,8 @@ func TestDirectoryManager_ListOperations(t *testing.T) {
 		t.Fatalf("Expected 0 indices, got %d", len(indices))
 	}
 
-	// 创建一些索�?	indexNames := []string{"index1", "index2", "index3"}
+	// 创建一些索引
+	indexNames := []string{"index1", "index2", "index3"}
 	for _, name := range indexNames {
 		err = manager.CreateIndex(name)
 		if err != nil {
@@ -299,7 +310,8 @@ func TestDirectoryManager_ListOperations(t *testing.T) {
 		}
 	}
 
-	// 测试列出�?	tables, err := manager.ListTables(indexNames[0])
+	// 测试列出表
+	tables, err := manager.ListTables(indexNames[0])
 	if err != nil {
 		t.Fatalf("Failed to list tables: %v", err)
 	}
@@ -316,7 +328,8 @@ func TestDirectoryManager_ListOperations(t *testing.T) {
 		}
 	}
 
-	// 验证表列�?	tables, err = manager.ListTables(indexNames[0])
+	// 验证表列表
+	tables, err = manager.ListTables(indexNames[0])
 	if err != nil {
 		t.Fatalf("Failed to list tables: %v", err)
 	}
@@ -349,7 +362,8 @@ func TestDirectoryManager_PathGeneration(t *testing.T) {
 		t.Fatalf("Expected index path %s, got %s", expectedIndexPath, indexPath)
 	}
 
-	// 测试表路�?	tablePath := manager.GetTablePath(indexName, tableName)
+	// 测试表路径
+	tablePath := manager.GetTablePath(indexName, tableName)
 	expectedTablePath := filepath.Join(tempDir, "indices", indexName, "tables", tableName)
 	if tablePath != expectedTablePath {
 		t.Fatalf("Expected table path %s, got %s", expectedTablePath, tablePath)
@@ -362,7 +376,8 @@ func TestDirectoryManager_PathGeneration(t *testing.T) {
 		t.Fatalf("Expected data path %s, got %s", expectedDataPath, dataPath)
 	}
 
-	// 测试元数据路�?	metadataPath := manager.GetIndexMetadataPath(indexName)
+	// 测试元数据路径
+	metadataPath := manager.GetIndexMetadataPath(indexName)
 	expectedMetadataPath := filepath.Join(tempDir, "indices", indexName, "metadata.json")
 	if metadataPath != expectedMetadataPath {
 		t.Fatalf("Expected metadata path %s, got %s", expectedMetadataPath, metadataPath)
@@ -383,7 +398,8 @@ func TestDirectoryManager_InvalidPathNames(t *testing.T) {
 	}
 	defer manager.Cleanup()
 
-	// 测试无效路径名应该返回空字符�?	invalidNames := []string{
+	// 测试无效路径名应该返回空字符串
+	invalidNames := []string{
 		"",
 		".hidden",
 		"invalid.name",
@@ -406,7 +422,7 @@ func TestDirectoryManager_ConfigLimits(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// 创建限制�?个索引的配置
+	// 创建限制1个索引的配置
 	config := directory.DefaultDirectoryConfig(tempDir)
 	config.MaxIndices = 1
 
@@ -416,12 +432,14 @@ func TestDirectoryManager_ConfigLimits(t *testing.T) {
 	}
 	defer manager.Cleanup()
 
-	// 创建第一个索引应该成�?	err = manager.CreateIndex("index1")
+	// 创建第一个索引应该成功
+	err = manager.CreateIndex("index1")
 	if err != nil {
 		t.Fatalf("Failed to create first index: %v", err)
 	}
 
-	// 创建第二个索引应该失�?	err = manager.CreateIndex("index2")
+	// 创建第二个索引应该失败
+	err = manager.CreateIndex("index2")
 	if err == nil {
 		t.Fatal("Creating second index should fail due to limit")
 	}
@@ -441,7 +459,8 @@ func TestDirectoryManager_Stats(t *testing.T) {
 	}
 	defer manager.Cleanup()
 
-	// 获取空统计信�?	stats, err := manager.GetStats()
+	// 获取空统计信息
+	stats, err := manager.GetStats()
 	if err != nil {
 		t.Fatalf("Failed to get stats: %v", err)
 	}
@@ -450,7 +469,8 @@ func TestDirectoryManager_Stats(t *testing.T) {
 		t.Fatalf("Expected 0 total indices, got %d", stats.TotalIndices)
 	}
 
-	// 创建一些索引和�?	err = manager.CreateIndex("index1")
+	// 创建一些索引和表
+	err = manager.CreateIndex("index1")
 	if err != nil {
 		t.Fatalf("Failed to create index1: %v", err)
 	}
@@ -514,7 +534,8 @@ func TestDirectoryManager_ConcurrentOperations(t *testing.T) {
 		}(i)
 	}
 
-	// 等待所有协程完�?	for i := 0; i < 5; i++ {
+	// 等待所有协程完成
+	for i := 0; i < 5; i++ {
 		<-done
 	}
 

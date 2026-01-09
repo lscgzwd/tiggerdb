@@ -791,7 +791,8 @@ func TestDataIntegrityAfterIndexing(t *testing.T) {
 	// 验证 bool 查询准确性
 	t.Run("验证 bool 查询", func(t *testing.T) {
 		// active=true AND category=test
-		activeQuery := query.NewTermQuery("true")
+		// 注意：Bleve 将 bool 字段索引为 "T" 或 "F"，所以需要查询 "T" 而不是 "true"
+		activeQuery := query.NewTermQuery("T")
 		activeQuery.SetField("active")
 
 		categoryQuery := query.NewTermQuery("test")

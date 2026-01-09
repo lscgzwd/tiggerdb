@@ -203,13 +203,3 @@ func (mms *MemoryMetadataStore) incrementVersion() {
 	mms.version++
 	mms.versionMu.Unlock()
 }
-
-// UnsupportedOperationError 不支持的操作错误
-type UnsupportedOperationError struct {
-	Operation string
-	Reason    string
-}
-
-func (e *UnsupportedOperationError) Error() string {
-	return "unsupported operation: " + e.Operation + " - " + e.Reason
-}

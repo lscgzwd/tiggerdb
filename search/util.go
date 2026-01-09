@@ -236,4 +236,8 @@ var (
 type BM25Stats struct {
 	DocCount         float64        `json:"doc_count"`
 	FieldCardinality map[string]int `json:"field_cardinality"`
+	// TermDocCounts 存储每个字段中每个词的全局文档频率
+	// 格式: field -> term -> docCount
+	// 用于 GlobalScoring 场景下正确计算 IDF
+	TermDocCounts map[string]map[string]uint64 `json:"term_doc_counts,omitempty"`
 }

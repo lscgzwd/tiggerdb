@@ -92,6 +92,9 @@ func setupSearchTestEnvironment(t *testing.T) (*DocumentHandler, func(), string)
 		t.Fatalf("Failed to create index: %s", w.Body.String())
 	}
 
+	// 等待索引创建完成，确保文件锁释放（Windows文件锁释放需要时间）
+	time.Sleep(200 * time.Millisecond)
+
 	// 索引测试数据
 	testData := `{"index":{"_index":"` + indexName + `","_id":"doc1"}}
 {"name":"apple","category":"fruit","price":1.5}
@@ -102,7 +105,8 @@ func setupSearchTestEnvironment(t *testing.T) (*DocumentHandler, func(), string)
 {"index":{"_index":"` + indexName + `","_id":"doc4"}}
 {"name":"laptop","category":"electronics","price":999.99}
 {"index":{"_index":"` + indexName + `","_id":"doc5"}}
-{"name":"book","category":"books","price":25.0,"nested":{"author":"John Doe","year":2023}}}`
+{"name":"book","category":"books","price":25.0,"nested":{"author":"John Doe","year":2023}}
+`
 
 	dataReq := httptest.NewRequest("POST", "/_bulk", strings.NewReader(testData))
 	dataReq.Header.Set("Content-Type", "application/x-ndjson")
@@ -145,9 +149,10 @@ func TestDocumentHandler_Search_MatchAll(t *testing.T) {
 		t.Fatalf("Search failed: %s", searchW.Body.String())
 	}
 
-	// 验证返回了5个文档
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":5,"relation":"eq"}`) {
-		t.Fatalf("Expected 5 documents, got: %s", searchW.Body.String())
+	// 验证返回了5个文档（JSON字段顺序可能不同，所以分别检查value和relation）
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":5`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 5 documents, got: %s", bodyStr)
 	}
 
 	t.Log("Search match_all test passed")
@@ -171,8 +176,9 @@ func TestDocumentHandler_Search_Match(t *testing.T) {
 	}
 
 	// 验证返回了1个文档
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":1,"relation":"eq"}`) {
-		t.Fatalf("Expected 1 document, got: %s", searchW.Body.String())
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":1`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 1 document, got: %s", bodyStr)
 	}
 
 	// 验证返回了apple文档
@@ -201,8 +207,9 @@ func TestDocumentHandler_Search_Term(t *testing.T) {
 	}
 
 	// 验证返回了2个文档（apple和banana都是fruit）
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":2,"relation":"eq"}`) {
-		t.Fatalf("Expected 2 documents, got: %s", searchW.Body.String())
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":2`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 2 documents, got: %s", bodyStr)
 	}
 
 	t.Log("Search term test passed")
@@ -226,8 +233,9 @@ func TestDocumentHandler_Search_Range(t *testing.T) {
 	}
 
 	// 验证返回了3个文档（价格在1.0-3.0之间的）
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":3,"relation":"eq"}`) {
-		t.Fatalf("Expected 3 documents, got: %s", searchW.Body.String())
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":3`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 3 documents, got: %s", bodyStr)
 	}
 
 	t.Log("Search range test passed")
@@ -251,8 +259,9 @@ func TestDocumentHandler_Search_Bool(t *testing.T) {
 	}
 
 	// 验证返回了1个文档（只有apple是fruit且不是banana）
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":1,"relation":"eq"}`) {
-		t.Fatalf("Expected 1 document, got: %s", searchW.Body.String())
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":1`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 1 document, got: %s", bodyStr)
 	}
 
 	// 验证返回了apple文档
@@ -281,8 +290,9 @@ func TestDocumentHandler_Search_Sort(t *testing.T) {
 	}
 
 	// 验证返回了5个文档
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":5,"relation":"eq"}`) {
-		t.Fatalf("Expected 5 documents, got: %s", searchW.Body.String())
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":5`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 5 documents, got: %s", bodyStr)
 	}
 
 	t.Log("Search sort test passed")
@@ -305,9 +315,10 @@ func TestDocumentHandler_Search_Pagination(t *testing.T) {
 		t.Fatalf("Search failed: %s", searchW.Body.String())
 	}
 
-	// 验证返回了5个文档但只显示2个
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":5,"relation":"eq"}`) {
-		t.Fatalf("Expected 5 total documents, got: %s", searchW.Body.String())
+	// 验证返回了5个文档但只显示2个（JSON字段顺序可能不同，所以分别检查value和relation）
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":5`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 5 total documents, got: %s", bodyStr)
 	}
 
 	t.Log("Search pagination test passed")
@@ -329,8 +340,9 @@ func TestDocumentHandler_Search_GET(t *testing.T) {
 	}
 
 	// 验证返回了1个文档
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":1,"relation":"eq"}`) {
-		t.Fatalf("Expected 1 document, got: %s", searchW.Body.String())
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":1`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 1 document, got: %s", bodyStr)
 	}
 
 	t.Log("Search GET test passed")
@@ -395,8 +407,9 @@ func TestDocumentHandler_Search_Fields(t *testing.T) {
 	}
 
 	// 验证返回了5个文档
-	if !strings.Contains(searchW.Body.String(), `"total":{"value":5,"relation":"eq"}`) {
-		t.Fatalf("Expected 5 documents, got: %s", searchW.Body.String())
+	bodyStr := searchW.Body.String()
+	if !strings.Contains(bodyStr, `"value":5`) || !strings.Contains(bodyStr, `"relation":"eq"`) {
+		t.Fatalf("Expected 5 documents, got: %s", bodyStr)
 	}
 
 	t.Log("Search fields test passed")

@@ -761,6 +761,7 @@ func constructBM25PreSearchData(rv map[string]map[string]interface{}, sr *Search
 			rv[index.Name()][search.BM25PreSearchDataKey] = &search.BM25Stats{
 				DocCount:         bmStats.DocCount,
 				FieldCardinality: bmStats.FieldCardinality,
+				TermDocCounts:    bmStats.TermDocCounts, // 传递全局 TermDocCounts 用于正确计算 IDF
 			}
 		}
 	}

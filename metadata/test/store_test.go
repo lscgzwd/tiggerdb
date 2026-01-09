@@ -114,7 +114,8 @@ func TestFileMetadataStore_IndexOperations(t *testing.T) {
 
 	indexName := "test_index"
 
-	// 创建索引元数�?	indexMetadata := &metadata.IndexMetadata{
+	// 创建索引元数据
+	indexMetadata := &metadata.IndexMetadata{
 		Name:      indexName,
 		Mapping:   map[string]interface{}{"properties": map[string]interface{}{}},
 		Settings:  map[string]interface{}{"refresh_interval": "1s"},
@@ -152,7 +153,8 @@ func TestFileMetadataStore_IndexOperations(t *testing.T) {
 		t.Fatalf("Failed to delete index metadata: %v", err)
 	}
 
-	// 验证删除后获取失�?	_, err = store.GetIndexMetadata(indexName)
+	// 验证删除后获取失败
+	_, err = store.GetIndexMetadata(indexName)
 	if err == nil {
 		t.Fatal("Expected error when getting deleted index metadata")
 	}
@@ -244,7 +246,8 @@ func TestFileMetadataStore_TableOperations(t *testing.T) {
 		t.Fatalf("Failed to delete table metadata: %v", err)
 	}
 
-	// 验证删除后获取失�?	_, err = store.GetTableMetadata(indexName, tableName)
+	// 验证删除后获取失败
+	_, err = store.GetTableMetadata(indexName, tableName)
 	if err == nil {
 		t.Fatal("Expected error when getting deleted table metadata")
 	}
@@ -309,7 +312,8 @@ func TestFileMetadataStore_ListOperations(t *testing.T) {
 		}
 	}
 
-	// 创建�?	indexName := "index1"
+	// 创建表
+	indexName := "index1"
 	tableNames := []string{"table1", "table2"}
 	for _, tableName := range tableNames {
 		schema := &metadata.TableSchema{
@@ -332,7 +336,8 @@ func TestFileMetadataStore_ListOperations(t *testing.T) {
 		}
 	}
 
-	// 测试列出�?	tables, err := store.ListTableMetadata(indexName)
+	// 测试列出表
+	tables, err := store.ListTableMetadata(indexName)
 	if err != nil {
 		t.Fatalf("Failed to list tables: %v", err)
 	}
@@ -356,7 +361,8 @@ func TestMemoryMetadataStore_BasicOperations(t *testing.T) {
 
 	indexName := "test_index"
 
-	// 创建索引元数�?	indexMetadata := &metadata.IndexMetadata{
+	// 创建索引元数据
+	indexMetadata := &metadata.IndexMetadata{
 		Name:      indexName,
 		Mapping:   map[string]interface{}{"properties": map[string]interface{}{}},
 		Settings:  map[string]interface{}{},
@@ -431,7 +437,8 @@ func TestMetadataStore_VersionOperations(t *testing.T) {
 		t.Fatalf("Snapshot file should exist: %s", snapshotPath)
 	}
 
-	// 保存一些元数据来改变版�?	indexMetadata := &metadata.IndexMetadata{
+	// 保存一些元数据来改变版本
+	indexMetadata := &metadata.IndexMetadata{
 		Name:      "test_index",
 		Mapping:   map[string]interface{}{"properties": map[string]interface{}{}},
 		Settings:  map[string]interface{}{},
@@ -446,7 +453,8 @@ func TestMetadataStore_VersionOperations(t *testing.T) {
 		t.Fatalf("Failed to save index metadata: %v", err)
 	}
 
-	// 获取新版�?	newVersion, err := store.GetLatestVersion()
+	// 获取新版本
+	newVersion, err := store.GetLatestVersion()
 	if err != nil {
 		t.Fatalf("Failed to get new version: %v", err)
 	}
@@ -477,7 +485,7 @@ func TestMetadataStore_Errors(t *testing.T) {
 		t.Fatalf("Expected MetadataNotFoundError, got %T", err)
 	}
 
-	// 测试获取不存在的�?	_, err = store.GetTableMetadata("index", "nonexistent")
+	// 测试获取不存在的�?	_, err = store.GetTableMetadata("index", "nonexistent")
 	if err == nil {
 		t.Fatal("Expected error when getting nonexistent table")
 	}
@@ -498,7 +506,8 @@ func TestMemoryMetadataStore_RestoreSnapshot(t *testing.T) {
 	}
 	defer store.Close()
 
-	// 内存存储不支持恢复快�?	err = store.RestoreSnapshot(1)
+	// 内存存储不支持恢复快照
+	err = store.RestoreSnapshot(1)
 	if err == nil {
 		t.Fatal("Expected error when restoring snapshot in memory store")
 	}

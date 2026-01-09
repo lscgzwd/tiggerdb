@@ -85,11 +85,13 @@ func (s *synonymPreSearchResultProcessor) finalize(sr *SearchResult) {
 type bm25PreSearchResultProcessor struct {
 	docCount         float64 // bm25 specific stats
 	fieldCardinality map[string]int
+	termDocCounts    map[string]map[string]uint64 // field -> term -> docCount
 }
 
 func newBM25PreSearchResultProcessor() *bm25PreSearchResultProcessor {
 	return &bm25PreSearchResultProcessor{
 		fieldCardinality: make(map[string]int),
+		termDocCounts:    make(map[string]map[string]uint64),
 	}
 }
 
@@ -98,7 +100,20 @@ func (b *bm25PreSearchResultProcessor) add(sr *SearchResult, indexName string) {
 	if sr.BM25Stats != nil {
 		b.docCount += sr.BM25Stats.DocCount
 		for field, cardinality := range sr.BM25Stats.FieldCardinality {
+			// FieldCardinality 代表字段中所有词项出现的总次数（用于计算平均文档长度）
+			// 需要相加，因为每个分区的文档是不重叠的
+			// avgDocLength = FieldCardinality / DocCount
 			b.fieldCardinality[field] += cardinality
+		}
+		// 合并每个词的文档频率
+		// TermDocCounts 需要相加，因为每个分区的文档是不重叠的
+		for field, terms := range sr.BM25Stats.TermDocCounts {
+			if b.termDocCounts[field] == nil {
+				b.termDocCounts[field] = make(map[string]uint64)
+			}
+			for term, count := range terms {
+				b.termDocCounts[field][term] += count
+			}
 		}
 	}
 }
@@ -107,6 +122,7 @@ func (b *bm25PreSearchResultProcessor) finalize(sr *SearchResult) {
 	sr.BM25Stats = &search.BM25Stats{
 		DocCount:         b.docCount,
 		FieldCardinality: b.fieldCardinality,
+		TermDocCounts:    b.termDocCounts,
 	}
 }
 

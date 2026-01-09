@@ -373,10 +373,37 @@ func (fms *FileMetadataStore) saveIndexMetadataToFile(indexName string, metadata
 
 // GetIndexMetadata 获取索引元数据
 func (fms *FileMetadataStore) GetIndexMetadata(indexName string) (*IndexMetadata, error) {
-	// 检查缓存（读锁）
+	// 先检查文件是否存在（这是最权威的检查）
+	metadataPath := filepath.Join(fms.baseDir, "indexes", indexName, "metadata.json")
+	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
+		// 文件不存在，清除可能存在的缓存
+		if fms.config.EnableCache {
+			fms.cacheMu.Lock()
+			delete(fms.cache, fmt.Sprintf("index_%s", indexName))
+			fms.cacheMu.Unlock()
+		}
+		return nil, &MetadataNotFoundError{
+			ResourceType: "index",
+			ResourceName: indexName,
+		}
+	}
+
+	// 检查缓存（读锁）- 但需要再次验证文件是否存在
 	if fms.config.EnableCache {
 		fms.cacheMu.RLock()
 		if cached, exists := fms.cache[fmt.Sprintf("index_%s", indexName)]; exists {
+			// 再次验证文件是否存在（防止删除后缓存中仍有数据）
+			if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
+				fms.cacheMu.RUnlock()
+				// 文件不存在，清除缓存
+				fms.cacheMu.Lock()
+				delete(fms.cache, fmt.Sprintf("index_%s", indexName))
+				fms.cacheMu.Unlock()
+				return nil, &MetadataNotFoundError{
+					ResourceType: "index",
+					ResourceName: indexName,
+				}
+			}
 			fms.cacheMu.RUnlock()
 			if metadata, ok := cached.(*IndexMetadata); ok {
 				return metadata, nil
@@ -392,6 +419,22 @@ func (fms *FileMetadataStore) GetIndexMetadata(indexName string) (*IndexMetadata
 	fms.indexesMu.RUnlock()
 
 	if exists {
+		// 再次验证文件是否存在（防止删除后内存中仍有数据）
+		if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
+			// 文件不存在，清除内存和缓存
+			fms.indexesMu.Lock()
+			delete(fms.indexes, indexName)
+			fms.indexesMu.Unlock()
+			if fms.config.EnableCache {
+				fms.cacheMu.Lock()
+				delete(fms.cache, fmt.Sprintf("index_%s", indexName))
+				fms.cacheMu.Unlock()
+			}
+			return nil, &MetadataNotFoundError{
+				ResourceType: "index",
+				ResourceName: indexName,
+			}
+		}
 		// 更新缓存（写锁）
 		if fms.config.EnableCache {
 			fms.cacheMu.Lock()
@@ -401,7 +444,15 @@ func (fms *FileMetadataStore) GetIndexMetadata(indexName string) (*IndexMetadata
 		return metadata, nil
 	}
 
-	// 内存中没有，尝试从文件加载
+	// 再次检查文件是否存在（防止删除后文件被重新创建）
+	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
+		return nil, &MetadataNotFoundError{
+			ResourceType: "index",
+			ResourceName: indexName,
+		}
+	}
+
+	// 尝试从文件加载
 	metadata, err := fms.loadIndexMetadata(indexName)
 	if err != nil {
 		return nil, &MetadataNotFoundError{
@@ -427,6 +478,12 @@ func (fms *FileMetadataStore) GetIndexMetadata(indexName string) (*IndexMetadata
 
 // DeleteIndexMetadata 删除索引元数据
 func (fms *FileMetadataStore) DeleteIndexMetadata(indexName string) error {
+	// 先删除文件
+	indexDir := filepath.Join(fms.baseDir, "indexes", indexName)
+	if err := os.RemoveAll(indexDir); err != nil {
+		return err
+	}
+
 	// 从内存中删除（写锁）
 	fms.indexesMu.Lock()
 	delete(fms.indexes, indexName)
@@ -434,22 +491,17 @@ func (fms *FileMetadataStore) DeleteIndexMetadata(indexName string) error {
 
 	// 更新缓存（写锁）
 	fms.cacheMu.Lock()
-	defer fms.cacheMu.Unlock()
+	// 清空相关缓存（必须在锁内清除）
+	fms.clearCache(fmt.Sprintf("index_%s", indexName))
+	fms.cacheMu.Unlock()
 
 	// 从tables中删除（注意：tables也需要锁保护，但这里先修复indexes的问题）
+	fms.cacheMu.Lock()
 	delete(fms.tables, indexName)
-
-	// 删除文件
-	indexDir := filepath.Join(fms.baseDir, "indexes", indexName)
-	if err := os.RemoveAll(indexDir); err != nil {
-		return err
-	}
+	fms.cacheMu.Unlock()
 
 	// 更新版本
 	fms.incrementVersion()
-
-	// 清空相关缓存
-	fms.clearCache(fmt.Sprintf("index_%s", indexName))
 
 	return nil
 }
@@ -513,13 +565,37 @@ func (fms *FileMetadataStore) saveTableMetadataToFile(indexName, tableName strin
 
 // GetTableMetadata 获取表元数据
 func (fms *FileMetadataStore) GetTableMetadata(indexName, tableName string) (*TableMetadata, error) {
+	// 先检查文件是否存在（这是最权威的检查）
+	tableMetadataPath := filepath.Join(fms.baseDir, "indexes", indexName, "tables", tableName, "metadata.json")
+	if _, err := os.Stat(tableMetadataPath); os.IsNotExist(err) {
+		// 文件不存在，清除可能存在的缓存
+		if fms.config.EnableCache {
+			fms.cacheMu.Lock()
+			delete(fms.cache, fmt.Sprintf("table_%s_%s", indexName, tableName))
+			fms.cacheMu.Unlock()
+		}
+		return nil, &MetadataNotFoundError{
+			ResourceType: "table",
+			ResourceName: fmt.Sprintf("%s/%s", indexName, tableName),
+		}
+	}
+
 	fms.cacheMu.RLock()
 	defer fms.cacheMu.RUnlock()
 
-	// 检查缓存
+	// 检查缓存 - 但需要再次验证文件是否存在
 	if fms.config.EnableCache {
 		cacheKey := fmt.Sprintf("table_%s_%s", indexName, tableName)
 		if cached, exists := fms.cache[cacheKey]; exists {
+			// 再次验证文件是否存在（防止删除后缓存中仍有数据）
+			if _, err := os.Stat(tableMetadataPath); os.IsNotExist(err) {
+				// 文件不存在，清除缓存
+				delete(fms.cache, cacheKey)
+				return nil, &MetadataNotFoundError{
+					ResourceType: "table",
+					ResourceName: fmt.Sprintf("%s/%s", indexName, tableName),
+				}
+			}
 			if metadata, ok := cached.(*TableMetadata); ok {
 				return metadata, nil
 			}
@@ -529,6 +605,18 @@ func (fms *FileMetadataStore) GetTableMetadata(indexName, tableName string) (*Ta
 	// 从内存中获取
 	if indexTables, exists := fms.tables[indexName]; exists {
 		if metadata, exists := indexTables[tableName]; exists {
+			// 再次验证文件是否存在（防止删除后内存中仍有数据）
+			if _, err := os.Stat(tableMetadataPath); os.IsNotExist(err) {
+				// 文件不存在，清除内存和缓存
+				delete(indexTables, tableName)
+				if fms.config.EnableCache {
+					delete(fms.cache, fmt.Sprintf("table_%s_%s", indexName, tableName))
+				}
+				return nil, &MetadataNotFoundError{
+					ResourceType: "table",
+					ResourceName: fmt.Sprintf("%s/%s", indexName, tableName),
+				}
+			}
 			// 更新缓存
 			if fms.config.EnableCache {
 				cacheKey := fmt.Sprintf("table_%s_%s", indexName, tableName)
@@ -546,25 +634,24 @@ func (fms *FileMetadataStore) GetTableMetadata(indexName, tableName string) (*Ta
 
 // DeleteTableMetadata 删除表元数据
 func (fms *FileMetadataStore) DeleteTableMetadata(indexName, tableName string) error {
-	fms.cacheMu.Lock()
-	defer fms.cacheMu.Unlock()
-
-	// 从内存中删除
-	if indexTables, exists := fms.tables[indexName]; exists {
-		delete(indexTables, tableName)
-	}
-
-	// 删除文件
+	// 先删除文件
 	tableDir := filepath.Join(fms.baseDir, "indexes", indexName, "tables", tableName)
 	if err := os.RemoveAll(tableDir); err != nil {
 		return err
 	}
 
+	// 更新缓存（写锁）
+	fms.cacheMu.Lock()
+	// 从内存中删除
+	if indexTables, exists := fms.tables[indexName]; exists {
+		delete(indexTables, tableName)
+	}
+	// 清空相关缓存（必须在锁内清除）
+	fms.clearCache(fmt.Sprintf("table_%s_%s", indexName, tableName))
+	fms.cacheMu.Unlock()
+
 	// 更新版本
 	fms.incrementVersion()
-
-	// 清空相关缓存
-	fms.clearCache(fmt.Sprintf("table_%s_%s", indexName, tableName))
 
 	return nil
 }

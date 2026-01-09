@@ -17,6 +17,7 @@ package dsl
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/lscgzwd/tiggerdb/logger"
 	"github.com/lscgzwd/tiggerdb/search/query"
@@ -100,6 +101,32 @@ func (p *QueryParser) parseTerm(body interface{}) (query.Query, error) {
 			disjQuery.SetMin(1)
 			return disjQuery, nil
 		case string:
+			// 处理字符串形式的 bool 值（"true"/"false"）
+			// 注意：Bleve 中 bool 字段被索引为 "T" 或 "F"（单个字符），而不是 "true"/"false"
+			if v == "true" || v == "false" {
+				var queries []query.Query
+				// 尝试匹配字符串形式（"true"/"false"）
+				termQueryStr := query.NewTermQuery(v)
+				termQueryStr.SetField(field)
+				queries = append(queries, termQueryStr)
+				
+				// 尝试匹配 Bleve bool 字段格式（"T"/"F"）
+				boolVal := v == "true"
+				if boolVal {
+					termQueryT := query.NewTermQuery("T")
+					termQueryT.SetField(field)
+					queries = append(queries, termQueryT)
+				} else {
+					termQueryF := query.NewTermQuery("F")
+					termQueryF.SetField(field)
+					queries = append(queries, termQueryF)
+				}
+				
+				disjQuery := query.NewDisjunctionQuery(queries)
+				disjQuery.SetMin(1)
+				return disjQuery, nil
+			}
+			
 			if numVal, err := strconv.ParseFloat(v, 64); err == nil {
 				var queries []query.Query
 				inclusive := true
@@ -116,9 +143,27 @@ func (p *QueryParser) parseTerm(body interface{}) (query.Query, error) {
 				return disjQuery, nil
 			}
 
+			// 对于字符串值，同时尝试原始值和小写值（因为默认analyzer会进行lowercase处理）
+			// 这样可以匹配被lowercase处理的字段（如 "TechCorp" 会被索引为 "techcorp"）
+			var queries []query.Query
 			termQuery := query.NewTermQuery(v)
 			termQuery.SetField(field)
-			return termQuery, nil
+			queries = append(queries, termQuery)
+			
+			// 如果原始值包含大写字母，也尝试小写版本
+			if strings.ToLower(v) != v {
+				lowerQuery := query.NewTermQuery(strings.ToLower(v))
+				lowerQuery.SetField(field)
+				queries = append(queries, lowerQuery)
+			}
+			
+			if len(queries) == 1 {
+				return queries[0], nil
+			}
+			
+			disjQuery := query.NewDisjunctionQuery(queries)
+			disjQuery.SetMin(1)
+			return disjQuery, nil
 		case bool:
 			boolStr := fmt.Sprintf("%v", v)
 			termQuery := query.NewTermQuery(boolStr)
@@ -223,9 +268,19 @@ func (p *QueryParser) parseTerms(body interface{}) (query.Query, error) {
 				tq.SetField(field)
 				termQueries = append(termQueries, tq)
 			case string:
+				// 对于字符串值，首先尝试 TermQuery（精确匹配）
 				tq := query.NewTermQuery(v)
 				tq.SetField(field)
 				termQueries = append(termQueries, tq)
+
+				// 如果字符串包含空格，可能被分词了，需要同时使用 MatchQuery 进行匹配
+				// 这样可以匹配分词后的字段（如 "John Smith" 可能被分词为 "john" 和 "smith"）
+				if strings.Contains(v, " ") {
+					matchQuery := query.NewMatchQuery(v)
+					matchQuery.SetField(field)
+					matchQuery.SetOperator(query.MatchQueryOperatorAnd) // 使用 AND 操作符确保所有词都匹配
+					termQueries = append(termQueries, matchQuery)
+				}
 
 				if numVal, err := strconv.ParseFloat(v, 64); err == nil {
 					inclusive := true

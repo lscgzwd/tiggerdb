@@ -34,7 +34,7 @@ func (p *QueryParser) parseWildcard(body interface{}) (query.Query, error) {
 	for field, value := range wildcardMap {
 		field = p.normalizeFieldName(field)
 		var wildcardValue string
-		var caseInsensitive bool
+		caseInsensitive := true // 默认启用大小写不敏感（ES 默认行为）
 
 		if strValue, ok := value.(string); ok {
 			wildcardValue = strValue
@@ -44,6 +44,7 @@ func (p *QueryParser) parseWildcard(body interface{}) (query.Query, error) {
 			} else {
 				return nil, fmt.Errorf("wildcard query must have 'value' field")
 			}
+			// 如果明确指定了 case_insensitive=false，则禁用大小写不敏感
 			if ci, ok := valueMap["case_insensitive"].(bool); ok {
 				caseInsensitive = ci
 			}
@@ -51,6 +52,8 @@ func (p *QueryParser) parseWildcard(body interface{}) (query.Query, error) {
 			return nil, fmt.Errorf("invalid wildcard query value type")
 		}
 
+		// 默认启用大小写不敏感，将查询值转换为小写
+		// 因为索引中的词通常是小写的（经过 lowercase filter）
 		if caseInsensitive {
 			wildcardValue = strings.ToLower(wildcardValue)
 			if logger.IsDebugEnabled() {

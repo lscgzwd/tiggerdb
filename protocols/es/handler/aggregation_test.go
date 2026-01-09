@@ -226,18 +226,35 @@ func setupAggregationTestEnv(t *testing.T) (*DocumentHandler, bleve.Index, func(
 		}
 	}
 
-	// 创建 DocumentHandler
-	handler := NewDocumentHandler(indexMgr, dirMgr, metaStore)
-
-	cleanup := func() {
-		idx.Close()
+	// 重要：在关闭索引之前，确保所有数据都已持久化
+	// 这可以避免文件锁问题
+	if err := idx.Close(); err != nil {
 		metaStore.Close()
 		dirMgr.DeleteIndex(indexName)
 		dirMgr.Cleanup()
 		os.RemoveAll(tempDir)
+		t.Fatalf("Failed to close index: %v", err)
 	}
 
-	return handler, idx, cleanup
+	// 等待文件锁释放（Windows需要）
+	time.Sleep(100 * time.Millisecond)
+
+	// 创建 DocumentHandler（现在会通过 indexMgr 打开索引）
+	handler := NewDocumentHandler(indexMgr, dirMgr, metaStore)
+
+	cleanup := func() {
+		// 关闭通过 indexMgr 打开的索引
+		indexMgr.CloseIndex(indexName)
+		metaStore.Close()
+		dirMgr.DeleteIndex(indexName)
+		dirMgr.Cleanup()
+		// 等待文件锁释放
+		time.Sleep(100 * time.Millisecond)
+		os.RemoveAll(tempDir)
+	}
+
+	// 返回 nil 作为 idx，因为索引已经关闭，需要通过 indexMgr 访问
+	return handler, nil, cleanup
 }
 
 // executeSearch 执行搜索请求并返回响应
